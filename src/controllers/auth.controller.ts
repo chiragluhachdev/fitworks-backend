@@ -94,7 +94,10 @@ export const registerGym = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error("Register Gym Error:", error);
-    res.status(500).json({ success: false, message: "Server error during registration" });
+    const message = error?.code === 11000 
+      ? "Account with this email already exists" 
+      : error?.message || "Registration failed. Please verify your details.";
+    res.status(400).json({ success: false, message });
   }
 };
 
@@ -105,12 +108,12 @@ export const registerTrainer = async (req: Request, res: Response) => {
     } = req.body;
 
     if (!email || !password || !personal?.fullName) {
-      return res.status(400).json({ success: false, message: "Please provide all required fields" });
+      return res.status(400).json({ success: false, message: "Please provide all required fields: Email, Password, and Full Name" });
     }
 
     const userExists = await User.findOne({ email });
     if (userExists) {
-      return res.status(400).json({ success: false, message: "Email already in use" });
+      return res.status(400).json({ success: false, message: "Email already in use. Please log in or use another email." });
     }
 
     // 1. Create User
@@ -122,11 +125,21 @@ export const registerTrainer = async (req: Request, res: Response) => {
 
     // 2. Generate slug and create Trainer
     const slug = await generateUniqueSlug(personal.fullName, Trainer);
+    
+    // Safe DOB parser
+    let parsedDob = new Date("1995-01-01");
+    if (personal.dateOfBirth) {
+      const d = new Date(personal.dateOfBirth);
+      if (!isNaN(d.getTime())) {
+        parsedDob = d;
+      }
+    }
+
     const trainer = await Trainer.create({
       userId: user._id,
       personal: {
-        fullName: personal.fullName,
-        dateOfBirth: personal.dateOfBirth || new Date("1995-01-01"),
+        fullName: personal.fullName.trim(),
+        dateOfBirth: parsedDob,
         gender: personal.gender || "Male",
         city: personal.city || "Mumbai",
         location: personal.location || personal.city || "Mumbai",
@@ -134,8 +147,8 @@ export const registerTrainer = async (req: Request, res: Response) => {
       professional: {
         professionalTitle: professional?.professionalTitle || "Certified Fitness Trainer",
         yearsOfExperience: Number(professional?.yearsOfExperience) || 1,
-        specializations: professional?.specializations || ["General Fitness"],
-        skills: professional?.skills || ["Fitness Coaching"],
+        specializations: professional?.specializations && professional.specializations.length > 0 ? professional.specializations : ["General Fitness"],
+        skills: professional?.skills && professional.skills.length > 0 ? professional.skills : ["Fitness Coaching"],
         education: professional?.education || "Certified Trainer",
         bio: professional?.bio || "Passionate fitness professional dedicated to helping clients achieve peak wellness.",
       },
@@ -170,7 +183,10 @@ export const registerTrainer = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error("Register Trainer Error:", error);
-    res.status(500).json({ success: false, message: "Server error during registration" });
+    const message = error?.code === 11000 
+      ? "Account with this email already exists" 
+      : error?.message || "Registration failed. Please verify your details.";
+    res.status(400).json({ success: false, message });
   }
 };
 
