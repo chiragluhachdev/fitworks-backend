@@ -67,7 +67,9 @@ export const getGyms = async (req: Request, res: Response) => {
 
 export const getVacancies = async (req: Request, res: Response) => {
   try {
-    const jobs = await Job.find().populate("gymId", "gymName location").sort({ createdAt: -1 });
+    const jobs = await Job.find()
+      .populate("gymId", "gymName gymLogo address city slug location website instagram numberOfLocations")
+      .sort({ createdAt: -1 });
     res.status(200).json({ success: true, data: jobs });
   } catch (error: any) {
     res.status(500).json({ success: false, message: "Server error" });
@@ -78,8 +80,8 @@ export const getApplications = async (req: Request, res: Response) => {
   try {
     const applications = await Application.find()
       .populate("jobId", "title")
-      .populate("trainerId", "personal.fullName slug")
-      .populate("gymId", "gymName slug")
+      .populate("trainerId", "personal.fullName personal.profilePhoto slug")
+      .populate("gymId", "gymName gymLogo slug")
       .sort({ createdAt: -1 });
     res.status(200).json({ success: true, data: applications });
   } catch (error: any) {
@@ -90,8 +92,8 @@ export const getApplications = async (req: Request, res: Response) => {
 export const getConnections = async (req: Request, res: Response) => {
   try {
     const connections = await Connection.find()
-      .populate("gymId", "gymName slug")
-      .populate("trainerId", "personal.fullName slug")
+      .populate("gymId", "gymName gymLogo slug")
+      .populate("trainerId", "personal.fullName personal.profilePhoto slug")
       .sort({ createdAt: -1 });
     res.status(200).json({ success: true, data: connections });
   } catch (error: any) {
