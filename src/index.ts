@@ -9,6 +9,7 @@ import applicationRoutes from "./routes/application.routes";
 import connectionRoutes from "./routes/connection.routes";
 import gymRoutes from "./routes/gym.routes";
 import adminRoutes from "./routes/admin.routes";
+import uploadRoutes from "./routes/upload.routes";
 
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -61,6 +62,7 @@ app.use("/api/jobs", jobRoutes);
 app.use("/api/applications", applicationRoutes);
 app.use("/api/connections", connectionRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/upload", uploadRoutes);
 
 app.get("/", (req: Request, res: Response) => {
   res.send("FitWorks API is running");
