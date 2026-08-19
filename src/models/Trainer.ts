@@ -29,6 +29,14 @@ export interface ITrainer extends Document {
   };
   verificationStatus: "pending" | "verified" | "rejected";
   verificationDocuments: string[]; // URLs to documents
+  payment?: {
+    isPaid: boolean;
+    orderId?: string;
+    paymentId?: string;
+    amount?: number;
+    paidAt?: Date;
+    status: string;
+  };
   slug: string;
   createdAt: Date;
   updatedAt: Date;
@@ -78,6 +86,14 @@ const trainerSchema = new Schema<ITrainer>(
       default: "pending",
     },
     verificationDocuments: [{ type: String }],
+    payment: {
+      isPaid: { type: Boolean, default: false },
+      orderId: { type: String },
+      paymentId: { type: String },
+      amount: { type: Number, default: 99 },
+      paidAt: { type: Date },
+      status: { type: String, default: "unpaid" },
+    },
     slug: {
       type: String,
       required: true,
