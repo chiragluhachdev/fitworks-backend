@@ -131,6 +131,7 @@ export const updateGym = async (req: Request, res: Response) => {
     }
 
     if (req.body.gymName) gym.gymName = req.body.gymName;
+    if (req.body.gymLogo !== undefined) gym.gymLogo = req.body.gymLogo;
     if (req.body.gymDescription !== undefined) gym.gymDescription = req.body.gymDescription;
     if (req.body.website !== undefined) gym.website = req.body.website;
     if (req.body.instagram !== undefined) gym.instagram = req.body.instagram;
