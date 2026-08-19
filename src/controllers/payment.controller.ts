@@ -63,9 +63,15 @@ export const createTrainerPaymentOrder = async (req: Request, res: Response): Pr
 
     if (!cashfreeRes.ok || !cashfreeData.payment_session_id) {
       console.error("Cashfree Order Creation Error:", cashfreeData);
+      
+      let friendlyMessage = cashfreeData.message || "Failed to initiate Cashfree payment session";
+      if (cashfreeData.type === "authentication_error" || cashfreeData.message?.toLowerCase().includes("authentication")) {
+        friendlyMessage = "Cashfree Authentication Failed: Ensure you are using Payment Gateway API keys from Cashfree Dashboard (Payment Gateway > Developers > API Keys) and IP whitelisting is not blocking requests.";
+      }
+
       return res.status(400).json({
         success: false,
-        message: cashfreeData.message || "Failed to initiate Cashfree payment session",
+        message: friendlyMessage,
         error: cashfreeData,
       });
     }
