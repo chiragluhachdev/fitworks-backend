@@ -78,3 +78,28 @@ export const updateApplicationStatus = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+export const deleteApplication = async (req: Request, res: Response) => {
+  try {
+    const application = await Application.findById(req.params.id);
+    if (!application) {
+      return res.status(404).json({ success: false, message: "Application not found" });
+    }
+
+    // Role check: trainer can delete own application, or admin can delete
+    if (
+      req.user &&
+      req.user.role === "trainer" &&
+      req.user.profileId &&
+      application.trainerId.toString() !== req.user.profileId
+    ) {
+      return res.status(403).json({ success: false, message: "Not authorized to delete this application" });
+    }
+
+    await Application.findByIdAndDelete(req.params.id);
+    res.status(200).json({ success: true, message: "Application withdrawn/deleted successfully" });
+  } catch (error: any) {
+    console.error("Delete Application Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
