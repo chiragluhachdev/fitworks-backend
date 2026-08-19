@@ -62,7 +62,7 @@ export const getJobs = async (req: Request, res: Response) => {
 
     const jobs = await Job.find(query)
       .sort({ createdAt: -1 })
-      .populate("gymId", "gymName gymLogo address city slug");
+      .populate("gymId", "gymName gymLogo address city slug website instagram gymDescription numberOfLocations");
 
     res.status(200).json({ success: true, count: jobs.length, data: jobs });
   } catch (error: any) {

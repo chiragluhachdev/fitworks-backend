@@ -8,6 +8,8 @@ import {
   getApplications,
   getConnections,
   updateTrainerVerification,
+  updateGym,
+  deleteGym,
 } from "../controllers/admin.controller";
 import { protect, authorize } from "../middleware/auth.middleware";
 
@@ -27,6 +29,10 @@ router.get("/gyms", getGyms);
 router.get("/vacancies", getVacancies);
 router.get("/applications", getApplications);
 router.get("/connections", getConnections);
+
+// Gym actions
+router.put("/gyms/:id", updateGym);
+router.delete("/gyms/:id", deleteGym);
 
 // Verification actions
 router.put("/trainers/:id/verify", updateTrainerVerification);

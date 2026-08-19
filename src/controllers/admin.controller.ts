@@ -122,3 +122,45 @@ export const updateTrainerVerification = async (req: Request, res: Response) => 
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+export const updateGym = async (req: Request, res: Response) => {
+  try {
+    const gym = await Gym.findById(req.params.id);
+    if (!gym) {
+      return res.status(404).json({ success: false, message: "Gym not found" });
+    }
+
+    if (req.body.gymName) gym.gymName = req.body.gymName;
+    if (req.body.gymDescription !== undefined) gym.gymDescription = req.body.gymDescription;
+    if (req.body.website !== undefined) gym.website = req.body.website;
+    if (req.body.instagram !== undefined) gym.instagram = req.body.instagram;
+    if (req.body.numberOfLocations !== undefined) gym.numberOfLocations = req.body.numberOfLocations;
+    if (req.body.address) gym.address = { ...gym.address, ...req.body.address };
+    if (req.body.hiringInformation) gym.hiringInformation = { ...gym.hiringInformation, ...req.body.hiringInformation };
+    if (req.body.contactPerson) gym.contactPerson = { ...gym.contactPerson, ...req.body.contactPerson };
+
+    await gym.save();
+    res.status(200).json({ success: true, data: gym });
+  } catch (error: any) {
+    console.error("Admin Update Gym Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const deleteGym = async (req: Request, res: Response) => {
+  try {
+    const gym = await Gym.findById(req.params.id);
+    if (!gym) {
+      return res.status(404).json({ success: false, message: "Gym not found" });
+    }
+
+    await Gym.findByIdAndDelete(req.params.id);
+    // Also clean up vacancies associated with this gym
+    await Job.deleteMany({ gymId: gym._id });
+
+    res.status(200).json({ success: true, message: "Gym deleted successfully" });
+  } catch (error: any) {
+    console.error("Admin Delete Gym Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
