@@ -3,6 +3,7 @@ import { Trainer } from "../models/Trainer";
 import { Job } from "../models/Job";
 import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
+import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 
 export const getTrainers = async (req: Request, res: Response) => {
   try {
@@ -56,9 +57,17 @@ export const getTrainerBySlug = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Trainer not found" });
     }
 
+    // Verification documents are government ID / PAN / certificate scans.
+    // Only the trainer themselves and admins may ever see those URLs.
+    const canSeeDocuments = isOwnerOrAdmin(req.user, trainer._id);
+    const data = trainer.toObject();
+    if (!canSeeDocuments) {
+      delete (data as any).verificationDocuments;
+    }
+
     res.status(200).json({
       success: true,
-      data: trainer,
+      data,
     });
   } catch (error: any) {
     console.error("Get Trainer Error:", error);
@@ -127,6 +136,10 @@ export const getTrainerDashboardStats = async (req: Request, res: Response) => {
     const trainer = await Trainer.findOne({ slug: req.params.slug });
     if (!trainer) {
       return res.status(404).json({ success: false, message: "Trainer not found" });
+    }
+
+    if (!isOwnerOrAdmin(req.user, trainer._id)) {
+      return res.status(403).json({ success: false, message: "Not authorized to view this dashboard" });
     }
 
     const applications = await Application.find({ trainerId: trainer._id })

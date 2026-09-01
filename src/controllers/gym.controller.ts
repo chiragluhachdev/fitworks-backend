@@ -3,6 +3,7 @@ import { Gym } from "../models/Gym";
 import { Job } from "../models/Job";
 import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
+import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 
 export const getGymBySlug = async (req: Request, res: Response) => {
   try {
@@ -49,6 +50,10 @@ export const getGymDashboardStats = async (req: Request, res: Response) => {
     const gym = await Gym.findOne({ slug: req.params.slug });
     if (!gym) {
       return res.status(404).json({ success: false, message: "Gym not found" });
+    }
+
+    if (!isOwnerOrAdmin(req.user, gym._id)) {
+      return res.status(403).json({ success: false, message: "Not authorized to view this dashboard" });
     }
 
     const totalVacancies = await Job.countDocuments({ gymId: gym._id, status: "open" });

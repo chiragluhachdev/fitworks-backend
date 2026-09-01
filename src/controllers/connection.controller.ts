@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { Connection } from "../models/Connection";
+import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 
 export const sendConnectionRequest = async (req: Request, res: Response) => {
   try {
@@ -28,7 +29,12 @@ export const sendConnectionRequest = async (req: Request, res: Response) => {
 
 export const getTrainerConnections = async (req: Request, res: Response) => {
   try {
-    const trainerId = req.params.trainerId; // In production use req.user.profileId
+    const trainerId = req.params.trainerId;
+
+    if (!isOwnerOrAdmin(req.user, trainerId)) {
+      return res.status(403).json({ success: false, message: "Not authorized to view these connections" });
+    }
+
     const connections = await Connection.find({ trainerId })
       .populate("gymId", "gymName gymLogo slug");
 
@@ -42,18 +48,24 @@ export const getTrainerConnections = async (req: Request, res: Response) => {
 export const updateConnectionStatus = async (req: Request, res: Response) => {
   try {
     const { status } = req.body;
-    
-    // In production we would verify that req.user.profileId matches connection.trainerId
 
+    const existing = await Connection.findById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: "Connection not found" });
+    }
+
+    // Only the invited trainer (or an admin) may accept or reject an invitation.
+    if (!isOwnerOrAdmin(req.user, existing.trainerId)) {
+      return res.status(403).json({ success: false, message: "Not authorized to update this connection" });
+    }
+
+    // runValidators keeps the status enum honest — without it Mongoose will
+    // happily persist an out-of-enum value on an update.
     const connection = await Connection.findByIdAndUpdate(
       req.params.id,
       { status },
-      { new: true }
+      { new: true, runValidators: true }
     );
-
-    if (!connection) {
-      return res.status(404).json({ success: false, message: "Connection not found" });
-    }
 
     res.status(200).json({ success: true, data: connection });
   } catch (error: any) {

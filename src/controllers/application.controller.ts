@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { Application } from "../models/Application";
 import { Job } from "../models/Job";
+import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 
 export const applyForJob = async (req: Request, res: Response) => {
   try {
@@ -35,7 +36,12 @@ export const applyForJob = async (req: Request, res: Response) => {
 
 export const getTrainerApplications = async (req: Request, res: Response) => {
   try {
-    const trainerId = req.params.trainerId; // In production use req.user.profileId
+    const trainerId = req.params.trainerId;
+
+    if (!isOwnerOrAdmin(req.user, trainerId)) {
+      return res.status(403).json({ success: false, message: "Not authorized to view these applications" });
+    }
+
     const applications = await Application.find({ trainerId })
       .populate("jobId", "position location salaryRange employmentType")
       .populate("gymId", "gymName gymLogo slug");
@@ -49,7 +55,12 @@ export const getTrainerApplications = async (req: Request, res: Response) => {
 
 export const getGymApplications = async (req: Request, res: Response) => {
   try {
-    const gymId = req.params.gymId; // In production use req.user.profileId
+    const gymId = req.params.gymId;
+
+    if (!isOwnerOrAdmin(req.user, gymId)) {
+      return res.status(403).json({ success: false, message: "Not authorized to view these applications" });
+    }
+
     const applications = await Application.find({ gymId })
       .populate("jobId", "position")
       .populate("trainerId", "personal professional slug");
@@ -64,14 +75,23 @@ export const getGymApplications = async (req: Request, res: Response) => {
 export const updateApplicationStatus = async (req: Request, res: Response) => {
   try {
     const { status } = req.body;
+
+    const existing = await Application.findById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: "Application not found" });
+    }
+
+    // Only the gym that received the application (or an admin) may move it along.
+    if (!isOwnerOrAdmin(req.user, existing.gymId)) {
+      return res.status(403).json({ success: false, message: "Not authorized to update this application" });
+    }
+
     const application = await Application.findByIdAndUpdate(
       req.params.id,
       { status },
-      { new: true }
+      { new: true, runValidators: true }
     );
-    if (!application) {
-      return res.status(404).json({ success: false, message: "Application not found" });
-    }
+
     res.status(200).json({ success: true, data: application });
   } catch (error: any) {
     console.error("Update Application Error:", error);

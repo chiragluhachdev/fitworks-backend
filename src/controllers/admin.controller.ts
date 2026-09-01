@@ -79,7 +79,7 @@ export const getVacancies = async (req: Request, res: Response) => {
 export const getApplications = async (req: Request, res: Response) => {
   try {
     const applications = await Application.find()
-      .populate("jobId", "title")
+      .populate("jobId", "position")
       .populate("trainerId", "personal.fullName personal.profilePhoto slug")
       .populate("gymId", "gymName gymLogo slug")
       .sort({ createdAt: -1 });

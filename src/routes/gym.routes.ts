@@ -9,7 +9,7 @@ import { protect, authorize } from "../middleware/auth.middleware";
 const router = express.Router();
 
 router.get("/:slug", getGymBySlug);
-router.get("/:slug/dashboard", getGymDashboardStats);
+router.get("/:slug/dashboard", protect, getGymDashboardStats);
 router.put("/:slug/profile", protect, authorize("gym", "admin"), updateGymProfile);
 
 export default router;
