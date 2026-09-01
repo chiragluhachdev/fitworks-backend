@@ -6,6 +6,7 @@ import { User } from "../models/User";
 import slugify from "slugify";
 import { Gym } from "../models/Gym";
 import { Trainer } from "../models/Trainer";
+import { normalizePhone, isValidPhone, looksLikeEmail } from "../utils/phone";
 
 const generateToken = (userId: string, role: string, profileId?: string) => {
   return jwt.sign({ userId, role, profileId }, process.env.JWT_SECRET as string, {
@@ -32,18 +33,29 @@ export const registerGym = async (req: Request, res: Response) => {
       address, numberOfLocations, hiringInformation, contactPerson, website, instagram
     } = req.body;
 
-    if (!email || !password || !gymName) {
-      return res.status(400).json({ success: false, message: "Please provide all required fields" });
+    const gymPhone = normalizePhone(contactPerson?.phone ?? req.body.phone);
+
+    if (!password || !gymName) {
+      return res.status(400).json({ success: false, message: "Please provide a gym name and password" });
+    }
+    if (!isValidPhone(gymPhone)) {
+      return res.status(400).json({ success: false, message: "Enter a valid 10-digit mobile number" });
     }
 
-    const userExists = await User.findOne({ email });
-    if (userExists) {
-      return res.status(400).json({ success: false, message: "Email already in use" });
+    const phoneTaken = await User.findOne({ phone: gymPhone });
+    if (phoneTaken) {
+      return res.status(400).json({ success: false, message: "This mobile number is already registered. Please log in." });
+    }
+
+    const normalizedEmail = email?.trim() ? String(email).trim().toLowerCase() : undefined;
+    if (normalizedEmail && (await User.findOne({ email: normalizedEmail }))) {
+      return res.status(400).json({ success: false, message: "This email is already registered. Please log in." });
     }
 
     // 1. Create User
     const user = await User.create({
-      email,
+      email: normalizedEmail,
+      phone: gymPhone,
       passwordHash: password,
       role: "gym",
     });
@@ -103,22 +115,37 @@ export const registerGym = async (req: Request, res: Response) => {
 
 export const registerTrainer = async (req: Request, res: Response) => {
   try {
-    const { 
+    const {
       email, password, personal, professional, workPreferences, verificationDocuments
     } = req.body;
 
-    if (!email || !password || !personal?.fullName) {
-      return res.status(400).json({ success: false, message: "Please provide all required fields: Email, Password, and Full Name" });
+    const phone = normalizePhone(personal?.phone ?? req.body.phone);
+
+    if (!password || !personal?.fullName) {
+      return res.status(400).json({ success: false, message: "Please provide your full name and a password" });
+    }
+    if (!isValidPhone(phone)) {
+      return res.status(400).json({ success: false, message: "Enter a valid 10-digit mobile number" });
     }
 
-    const userExists = await User.findOne({ email });
-    if (userExists) {
-      return res.status(400).json({ success: false, message: "Email already in use. Please log in or use another email." });
+    const phoneTaken = await User.findOne({ phone });
+    if (phoneTaken) {
+      return res.status(400).json({ success: false, message: "This mobile number is already registered. Please log in." });
+    }
+
+    // Email stays optional; only enforce uniqueness when one is supplied.
+    const normalizedEmail = email?.trim() ? String(email).trim().toLowerCase() : undefined;
+    if (normalizedEmail) {
+      const emailTaken = await User.findOne({ email: normalizedEmail });
+      if (emailTaken) {
+        return res.status(400).json({ success: false, message: "This email is already registered. Please log in." });
+      }
     }
 
     // 1. Create User
     const user = await User.create({
-      email,
+      email: normalizedEmail,
+      phone,
       passwordHash: password,
       role: "trainer",
     });
@@ -139,6 +166,8 @@ export const registerTrainer = async (req: Request, res: Response) => {
       userId: user._id,
       personal: {
         fullName: personal.fullName.trim(),
+        phone,
+        email: normalizedEmail,
         dateOfBirth: parsedDob,
         gender: personal.gender || "Male",
         city: personal.city || "Mumbai",
@@ -192,11 +221,15 @@ export const registerTrainer = async (req: Request, res: Response) => {
 
 export const login = async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body;
+    // `identifier` is the new field; `email` kept so older clients keep working.
+    const identifier: string = (req.body.identifier ?? req.body.email ?? req.body.phone ?? "").toString().trim();
+    const { password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: "Please provide email and password" });
+    if (!identifier || !password) {
+      return res.status(400).json({ success: false, message: "Please provide your email or mobile number and password" });
     }
+
+    const email = identifier;
 
     // Intercept Admin Login
     if (email === process.env.ADMIN_EMAIL && process.env.ADMIN_EMAIL) {
@@ -217,8 +250,12 @@ export const login = async (req: Request, res: Response) => {
       }
     }
 
-    // Find user and explicitly select passwordHash
-    const user = await User.findOne({ email }).select("+passwordHash");
+    // Accept either an email address or a mobile number as the identifier.
+    const lookup = looksLikeEmail(identifier)
+      ? { email: identifier.toLowerCase() }
+      : { phone: normalizePhone(identifier) };
+
+    const user = await User.findOne(lookup).select("+passwordHash");
 
     if (!user) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });

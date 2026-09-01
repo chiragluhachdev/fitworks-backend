@@ -4,6 +4,8 @@ export interface ITrainer extends Document {
   userId: mongoose.Types.ObjectId;
   personal: {
     fullName: string;
+    phone: string;
+    email?: string;
     profilePhoto?: string;
     dateOfBirth: Date;
     gender: string;
@@ -29,13 +31,25 @@ export interface ITrainer extends Document {
   };
   verificationStatus: "pending" | "verified" | "rejected";
   verificationDocuments: string[]; // URLs to documents
-  payment?: {
-    isPaid: boolean;
-    orderId?: string;
-    paymentId?: string;
-    amount?: number;
-    paidAt?: Date;
-    status: string;
+  subscription: {
+    plan: string;
+    /** Rupees billed per cycle, recorded as charged rather than recomputed. */
+    amountPerCycle: number;
+    currentPeriodStart?: Date;
+    currentPeriodEnd?: Date;
+    lastOrderId?: string;
+    lastPaymentId?: string;
+    pendingOrderId?: string;
+    cyclesPaid: number;
+    /** Immutable billing history. */
+    history: {
+      orderId: string;
+      paymentId: string;
+      amount: number;
+      paidAt: Date;
+      periodStart: Date;
+      periodEnd: Date;
+    }[];
   };
   slug: string;
   createdAt: Date;
@@ -52,6 +66,8 @@ const trainerSchema = new Schema<ITrainer>(
     },
     personal: {
       fullName: { type: String, required: true, trim: true },
+      phone: { type: String, required: true, trim: true },
+      email: { type: String, lowercase: true, trim: true },
       profilePhoto: { type: String, default: "" },
       dateOfBirth: { type: Date, required: true },
       gender: { type: String, required: true },
@@ -86,13 +102,25 @@ const trainerSchema = new Schema<ITrainer>(
       default: "pending",
     },
     verificationDocuments: [{ type: String }],
-    payment: {
-      isPaid: { type: Boolean, default: false },
-      orderId: { type: String },
-      paymentId: { type: String },
-      amount: { type: Number, default: 99 },
-      paidAt: { type: Date },
-      status: { type: String, default: "unpaid" },
+    subscription: {
+      plan: { type: String, default: "trainer_monthly_99" },
+      amountPerCycle: { type: Number, default: 99 },
+      currentPeriodStart: { type: Date },
+      currentPeriodEnd: { type: Date },
+      lastOrderId: { type: String },
+      lastPaymentId: { type: String },
+      pendingOrderId: { type: String },
+      cyclesPaid: { type: Number, default: 0 },
+      history: [
+        {
+          orderId: { type: String, required: true },
+          paymentId: { type: String, required: true },
+          amount: { type: Number, required: true },
+          paidAt: { type: Date, required: true },
+          periodStart: { type: Date, required: true },
+          periodEnd: { type: Date, required: true },
+        },
+      ],
     },
     slug: {
       type: String,
@@ -102,5 +130,8 @@ const trainerSchema = new Schema<ITrainer>(
   },
   { timestamps: true }
 );
+
+// Gym-facing search filters on this constantly.
+trainerSchema.index({ "subscription.currentPeriodEnd": 1 });
 
 export const Trainer = mongoose.model<ITrainer>("Trainer", trainerSchema);

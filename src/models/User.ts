@@ -2,7 +2,10 @@ import mongoose, { Document, Schema } from "mongoose";
 import bcrypt from "bcrypt";
 
 export interface IUser extends Document {
-  email: string;
+  /** Optional — trainers may register with a phone number alone. */
+  email?: string;
+  /** Bare 10-digit Indian mobile. Primary login identifier. */
+  phone: string;
   passwordHash: string;
   role: "gym" | "trainer" | "admin";
   profileId?: mongoose.Types.ObjectId; // References Gym or Trainer document
@@ -15,10 +18,19 @@ const userSchema = new Schema<IUser>(
   {
     email: {
       type: String,
-      required: [true, "Email is required"],
-      unique: true,
+      required: false,
       lowercase: true,
       trim: true,
+      // sparse so any number of accounts may omit an email, while the ones
+      // that supply one still can't collide.
+      index: { unique: true, sparse: true },
+    },
+    phone: {
+      type: String,
+      required: [true, "Phone number is required"],
+      unique: true,
+      trim: true,
+      match: [/^[6-9]\d{9}$/, "Enter a valid 10-digit Indian mobile number"],
     },
     passwordHash: {
       type: String,

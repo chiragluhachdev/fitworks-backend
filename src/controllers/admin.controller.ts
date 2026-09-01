@@ -5,6 +5,7 @@ import { Trainer } from "../models/Trainer";
 import { Job } from "../models/Job";
 import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
+import { getSubscriptionState } from "../utils/subscription";
 
 export const getDashboardStats = async (req: Request, res: Response) => {
   try {
@@ -17,6 +18,10 @@ export const getDashboardStats = async (req: Request, res: Response) => {
     const totalApplications = await Application.countDocuments();
     const hiredTrainers = await Application.countDocuments({ status: "hired" });
     const pendingConnections = await Connection.countDocuments({ status: "pending" });
+    const activeMembers = await Trainer.countDocuments({
+      "subscription.currentPeriodEnd": { $gt: new Date() },
+    });
+    const lapsedMembers = totalTrainers - activeMembers;
 
     res.status(200).json({
       success: true,
@@ -30,6 +35,8 @@ export const getDashboardStats = async (req: Request, res: Response) => {
         totalApplications,
         hiredTrainers,
         pendingConnections,
+        activeMembers,
+        lapsedMembers,
       }
     });
   } catch (error: any) {
@@ -50,7 +57,12 @@ export const getUsers = async (req: Request, res: Response) => {
 export const getTrainers = async (req: Request, res: Response) => {
   try {
     const trainers = await Trainer.find().sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: trainers });
+    // Attach derived membership status so admin can see who has lapsed.
+    const data = trainers.map((t) => ({
+      ...t.toObject(),
+      subscriptionState: getSubscriptionState(t.subscription),
+    }));
+    res.status(200).json({ success: true, data });
   } catch (error: any) {
     res.status(500).json({ success: false, message: "Server error" });
   }

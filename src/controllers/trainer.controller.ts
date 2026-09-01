@@ -4,13 +4,16 @@ import { Job } from "../models/Job";
 import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
+import { getSubscriptionState, activeSubscriptionFilter } from "../utils/subscription";
 
 export const getTrainers = async (req: Request, res: Response) => {
   try {
     const { location, experience, specialization, type, limit = 20, page = 1 } = req.query;
 
     const query: any = {
-      verificationStatus: "verified", // Only show verified trainers in public search
+      // Discoverable only while verified AND on an active membership.
+      verificationStatus: "verified",
+      ...activeSubscriptionFilter(),
     };
 
     if (location) {
@@ -157,8 +160,8 @@ export const getTrainerDashboardStats = async (req: Request, res: Response) => {
       success: true,
       data: {
         trainer,
+        subscription: getSubscriptionState(trainer.subscription),
         stats: {
-          profileViews: 48,
           activeApplications: applications.length,
           newConnections: connections.filter(c => c.status === "pending").length,
           verificationStatus: trainer.verificationStatus,

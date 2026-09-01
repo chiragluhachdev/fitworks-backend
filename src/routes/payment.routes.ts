@@ -3,6 +3,7 @@ import {
   createTrainerPaymentOrder,
   verifyTrainerPayment,
   getTrainerPaymentStatus,
+  getTrainerBillingHistory,
   razorpayWebhook,
 } from "../controllers/payment.controller";
 import { protect } from "../middleware/auth.middleware";
@@ -17,5 +18,6 @@ router.post("/verify-order", protect, verifyTrainerPayment);
 router.post("/webhook", razorpayWebhook);
 
 router.get("/status/:trainerSlug", getTrainerPaymentStatus);
+router.get("/history/:trainerSlug", protect, getTrainerBillingHistory);
 
 export default router;
