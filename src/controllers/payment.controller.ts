@@ -1,18 +1,44 @@
 import { Request, Response } from "express";
+import crypto from "crypto";
 import { Trainer } from "../models/Trainer";
+import {
+  razorpay,
+  RAZORPAY_KEY_ID,
+  RAZORPAY_KEY_SECRET,
+  RAZORPAY_WEBHOOK_SECRET,
+  BADGE_AMOUNT_PAISE,
+} from "../config/razorpay";
+import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 
-const CASHFREE_APP_ID = process.env.CASHFREE_APP_ID || "";
-const CASHFREE_SECRET_KEY = process.env.CASHFREE_SECRET_KEY || "";
-const CASHFREE_ENV = process.env.CASHFREE_ENV || "production";
-const CASHFREE_BASE_URL = CASHFREE_ENV === "production" 
-  ? "https://api.cashfree.com/pg" 
-  : "https://sandbox.cashfree.com/pg";
+/** Marks a trainer paid. Only ever called after a signature has been verified. */
+const markPaid = async (
+  filter: Record<string, unknown>,
+  { orderId, paymentId, amountPaise }: { orderId: string; paymentId: string; amountPaise: number }
+) =>
+  Trainer.findOneAndUpdate(
+    filter,
+    {
+      $set: {
+        "payment.isPaid": true,
+        "payment.orderId": orderId,
+        "payment.paymentId": paymentId,
+        "payment.status": "completed",
+        "payment.amount": amountPaise / 100,
+        "payment.paidAt": new Date(),
+      },
+    },
+    { new: true }
+  );
 
-// CREATE CASHFREE PAYMENT ORDER FOR ₹99
+/* ─────────────────────────── CREATE ORDER ─────────────────────────── */
+
 export const createTrainerPaymentOrder = async (req: Request, res: Response): Promise<any> => {
   try {
-    const { trainerSlug, email, phone, name } = req.body;
+    if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+      return res.status(500).json({ success: false, message: "Payment gateway is not configured" });
+    }
 
+    const { trainerSlug } = req.body;
     if (!trainerSlug) {
       return res.status(400).json({ success: false, message: "Trainer identifier is required" });
     }
@@ -22,159 +48,198 @@ export const createTrainerPaymentOrder = async (req: Request, res: Response): Pr
       return res.status(404).json({ success: false, message: "Trainer profile not found" });
     }
 
-    // Unique order ID (Alphanumeric, max 45 chars)
-    const orderId = `FW_TR_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`.toUpperCase();
-    const customerPhone = (phone || "9876543210").replace(/[^0-9]/g, "").slice(-10) || "9876543210";
-    const customerEmail = email || trainer.personal?.fullName?.toLowerCase().replace(/\s+/g, "") + "@fitworks.in";
-    const customerName = name || trainer.personal?.fullName || "FitWorks Trainer";
-    const customerId = `CUST_${trainer._id.toString().substring(0, 18)}`;
-
-    const returnUrl = `https://fitworks.in/trainer/${trainerSlug}/dashboard?payment_status=success&order_id={order_id}`;
-
-    const orderPayload = {
-      order_id: orderId,
-      order_amount: 99.00,
-      order_currency: "INR",
-      customer_details: {
-        customer_id: customerId,
-        customer_name: customerName.trim(),
-        customer_email: customerEmail.trim(),
-        customer_phone: customerPhone,
-      },
-      order_meta: {
-        return_url: returnUrl,
-        notify_url: "https://fitworks-backend-production.up.railway.app/api/payments/webhook",
-      },
-      order_note: "FitWorks ₹99 Lifetime Verified Trainer Profile Activation",
-    };
-
-    const cashfreeRes = await fetch(`${CASHFREE_BASE_URL}/orders`, {
-      method: "POST",
-      headers: {
-        "x-client-id": CASHFREE_APP_ID,
-        "x-client-secret": CASHFREE_SECRET_KEY,
-        "x-api-version": "2023-08-01",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(orderPayload),
-    });
-
-    const cashfreeData: any = await cashfreeRes.json();
-
-    if (!cashfreeRes.ok || !cashfreeData.payment_session_id) {
-      console.error("Cashfree Order Creation Error:", cashfreeData);
-      
-      let friendlyMessage = cashfreeData.message || "Failed to initiate Cashfree payment session";
-      if (cashfreeData.type === "authentication_error" || cashfreeData.message?.toLowerCase().includes("authentication")) {
-        friendlyMessage = "Cashfree Authentication Failed: Ensure you are using Payment Gateway API keys from Cashfree Dashboard (Payment Gateway > Developers > API Keys) and IP whitelisting is not blocking requests.";
-      }
-
-      return res.status(400).json({
-        success: false,
-        message: friendlyMessage,
-        error: cashfreeData,
-      });
+    if (!isOwnerOrAdmin(req.user, trainer._id)) {
+      return res.status(403).json({ success: false, message: "Not authorized to pay for this profile" });
     }
 
-    // Save pending order info to trainer profile
+    if (trainer.payment?.isPaid) {
+      return res.status(400).json({ success: false, message: "This profile is already activated" });
+    }
+
+    // Receipt is capped at 40 characters by Razorpay.
+    const order = await razorpay.orders.create({
+      amount: BADGE_AMOUNT_PAISE,
+      currency: "INR",
+      receipt: `fw_${trainer._id.toString()}`.slice(0, 40),
+      notes: {
+        trainerId: trainer._id.toString(),
+        trainerSlug: trainer.slug,
+        purpose: "FitWorks verified trainer badge",
+      },
+    });
+
     trainer.payment = {
       isPaid: false,
-      orderId: cashfreeData.order_id,
-      amount: 99,
+      orderId: order.id,
+      amount: BADGE_AMOUNT_PAISE / 100,
       status: "pending",
     };
     await trainer.save();
 
     return res.status(200).json({
       success: true,
-      orderId: cashfreeData.order_id,
-      paymentSessionId: cashfreeData.payment_session_id,
-      orderStatus: cashfreeData.order_status,
-      amount: 99,
+      orderId: order.id,
+      // Returned rather than kept in a NEXT_PUBLIC_ var so the backend alone
+      // decides which key (test or live) the checkout runs against.
+      keyId: RAZORPAY_KEY_ID,
+      amount: BADGE_AMOUNT_PAISE,
       currency: "INR",
+      trainerName: trainer.personal?.fullName,
     });
   } catch (error: any) {
-    console.error("Payment Order Controller Error:", error);
+    console.error("Razorpay Create Order Error:", error);
     return res.status(500).json({
       success: false,
-      message: error?.message || "Internal server error initiating payment",
+      message: error?.error?.description || error?.message || "Failed to start payment",
     });
   }
 };
 
-// VERIFY ORDER STATUS WITH CASHFREE
+/* ────────────────────── VERIFY CHECKOUT SIGNATURE ────────────────────── */
+
 export const verifyTrainerPayment = async (req: Request, res: Response): Promise<any> => {
   try {
-    const { orderId, trainerSlug } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, trainerSlug } = req.body;
 
-    if (!orderId) {
-      return res.status(400).json({ success: false, message: "Order ID is required" });
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ success: false, message: "Incomplete payment details" });
     }
 
-    // Fetch order details from Cashfree
-    const cashfreeRes = await fetch(`${CASHFREE_BASE_URL}/orders/${orderId}`, {
-      method: "GET",
-      headers: {
-        "x-client-id": CASHFREE_APP_ID,
-        "x-client-secret": CASHFREE_SECRET_KEY,
-        "x-api-version": "2023-08-01",
-      },
-    });
-
-    const orderData: any = await cashfreeRes.json();
-
-    if (!cashfreeRes.ok) {
-      return res.status(400).json({
-        success: false,
-        message: orderData.message || "Failed to fetch order details from Cashfree",
-      });
-    }
-
-    const isPaid = orderData.order_status === "PAID";
-
-    if (isPaid && trainerSlug) {
-      await Trainer.findOneAndUpdate(
-        { slug: trainerSlug },
-        {
-          $set: {
-            "payment.isPaid": true,
-            "payment.orderId": orderId,
-            "payment.status": "completed",
-            "payment.amount": 99,
-            "payment.paidAt": new Date(),
-          },
-        }
-      );
-    }
-
-    return res.status(200).json({
-      success: true,
-      orderId: orderData.order_id,
-      orderStatus: orderData.order_status,
-      isPaid,
-      message: isPaid ? "Payment confirmed and verified successfully!" : `Order is currently ${orderData.order_status}`,
-    });
-  } catch (error: any) {
-    console.error("Verify Payment Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: error?.message || "Internal error verifying payment",
-    });
-  }
-};
-
-// GET TRAINER PAYMENT STATUS
-export const getTrainerPaymentStatus = async (req: Request, res: Response): Promise<any> => {
-  try {
-    const { trainerSlug } = req.params;
-    const trainer = await Trainer.findOne({ slug: trainerSlug }).select("payment personal verificationStatus");
+    const trainer = await Trainer.findOne({ slug: trainerSlug });
     if (!trainer) {
       return res.status(404).json({ success: false, message: "Trainer not found" });
     }
 
+    if (!isOwnerOrAdmin(req.user, trainer._id)) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    // The signature can only be produced with our key secret, so a forged
+    // request cannot pass this check.
+    const expected = crypto
+      .createHmac("sha256", RAZORPAY_KEY_SECRET)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest("hex");
+
+    const provided = Buffer.from(razorpay_signature, "utf8");
+    const computed = Buffer.from(expected, "utf8");
+    const signatureValid =
+      provided.length === computed.length && crypto.timingSafeEqual(provided, computed);
+
+    if (!signatureValid) {
+      console.warn(`Invalid payment signature for order ${razorpay_order_id}`);
+      return res.status(400).json({ success: false, message: "Payment verification failed" });
+    }
+
+    // The order must be the one we issued for this trainer, and fully paid.
+    if (trainer.payment?.orderId !== razorpay_order_id) {
+      return res.status(400).json({ success: false, message: "Order does not belong to this profile" });
+    }
+
+    const order: any = await razorpay.orders.fetch(razorpay_order_id);
+    if (order.status !== "paid" || Number(order.amount_paid) < BADGE_AMOUNT_PAISE) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment not complete (status: ${order.status})`,
+      });
+    }
+
+    await markPaid({ slug: trainerSlug }, {
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      amountPaise: Number(order.amount_paid),
+    });
+
     return res.status(200).json({
       success: true,
-      payment: trainer.payment || { isPaid: false, status: "unpaid", amount: 99 },
+      isPaid: true,
+      message: "Payment verified — your verified badge is active.",
+    });
+  } catch (error: any) {
+    console.error("Razorpay Verify Error:", error);
+    return res.status(500).json({ success: false, message: "Error verifying payment" });
+  }
+};
+
+/* ─────────────────────────────── WEBHOOK ─────────────────────────────── */
+
+/**
+ * Razorpay's server-to-server confirmation. This is the safety net for when the
+ * browser never returns from checkout — the customer closed the tab, lost
+ * signal, etc. Signature is computed over the RAW body, so `req.rawBody` is
+ * captured by the express.json verify hook in index.ts.
+ */
+export const razorpayWebhook = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const signature = req.headers["x-razorpay-signature"] as string | undefined;
+    const raw = (req as any).rawBody;
+
+    if (!signature || !raw || !RAZORPAY_WEBHOOK_SECRET) {
+      return res.status(400).json({ success: false, message: "Invalid webhook request" });
+    }
+
+    const expected = crypto.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(raw).digest("hex");
+    const provided = Buffer.from(signature, "utf8");
+    const computed = Buffer.from(expected, "utf8");
+
+    if (provided.length !== computed.length || !crypto.timingSafeEqual(provided, computed)) {
+      console.warn("Razorpay webhook: signature mismatch");
+      return res.status(400).json({ success: false, message: "Invalid signature" });
+    }
+
+    const event = req.body?.event as string;
+    const payment = req.body?.payload?.payment?.entity;
+
+    if (event === "payment.captured" && payment) {
+      const trainerId = payment.notes?.trainerId;
+      const filter = trainerId ? { _id: trainerId } : { "payment.orderId": payment.order_id };
+
+      if (Number(payment.amount) >= BADGE_AMOUNT_PAISE) {
+        const updated = await markPaid(filter, {
+          orderId: payment.order_id,
+          paymentId: payment.id,
+          amountPaise: Number(payment.amount),
+        });
+        console.log(
+          updated
+            ? `Webhook: activated badge for ${updated.slug} (order ${payment.order_id})`
+            : `Webhook: no trainer matched order ${payment.order_id}`
+        );
+      } else {
+        console.warn(`Webhook: underpaid order ${payment.order_id} — ${payment.amount} paise`);
+      }
+    }
+
+    if (event === "payment.failed" && payment) {
+      await Trainer.findOneAndUpdate(
+        { "payment.orderId": payment.order_id },
+        { $set: { "payment.status": "failed", "payment.isPaid": false } }
+      );
+    }
+
+    // Always 200 on a valid signature, otherwise Razorpay keeps retrying.
+    return res.status(200).json({ success: true, received: true });
+  } catch (error: any) {
+    console.error("Razorpay Webhook Error:", error);
+    return res.status(200).json({ success: true, received: true });
+  }
+};
+
+/* ───────────────────────────── STATUS ───────────────────────────── */
+
+export const getTrainerPaymentStatus = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const trainer = await Trainer.findOne({ slug: req.params.trainerSlug }).select(
+      "payment verificationStatus"
+    );
+    if (!trainer) {
+      return res.status(404).json({ success: false, message: "Trainer not found" });
+    }
+
+    const payment = trainer.payment || { isPaid: false, status: "unpaid", amount: 99 };
+    return res.status(200).json({
+      success: true,
+      payment: { isPaid: !!payment.isPaid, status: payment.status, amount: payment.amount },
     });
   } catch (error: any) {
     console.error("Get Payment Status Error:", error);

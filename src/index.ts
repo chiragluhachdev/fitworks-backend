@@ -53,7 +53,15 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
+// Capture the raw body so the Razorpay webhook can verify its HMAC signature,
+// which is computed over the exact bytes Razorpay sent.
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      (req as any).rawBody = buf;
+    },
+  })
+);
 
 // Routes
 app.use("/api/auth", authRoutes);

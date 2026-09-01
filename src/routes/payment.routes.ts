@@ -3,17 +3,19 @@ import {
   createTrainerPaymentOrder,
   verifyTrainerPayment,
   getTrainerPaymentStatus,
+  razorpayWebhook,
 } from "../controllers/payment.controller";
+import { protect } from "../middleware/auth.middleware";
 
 const router = Router();
 
-// POST /api/payments/create-order
-router.post("/create-order", createTrainerPaymentOrder);
+// Trainer-initiated: both require a logged-in trainer who owns the profile.
+router.post("/create-order", protect, createTrainerPaymentOrder);
+router.post("/verify-order", protect, verifyTrainerPayment);
 
-// POST /api/payments/verify-order
-router.post("/verify-order", verifyTrainerPayment);
+// Razorpay server-to-server. Authenticated by HMAC signature, not by JWT.
+router.post("/webhook", razorpayWebhook);
 
-// GET /api/payments/status/:trainerSlug
 router.get("/status/:trainerSlug", getTrainerPaymentStatus);
 
 export default router;
