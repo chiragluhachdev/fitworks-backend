@@ -1,13 +1,17 @@
 import Razorpay from "razorpay";
 
-export const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "";
-export const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
-export const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
+// Read at call time, not module load: ES imports are evaluated before
+// dotenv.config() runs in index.ts, so a top-level read is always empty.
+export const keyId = () => process.env.RAZORPAY_KEY_ID || "";
+export const keySecret = () => process.env.RAZORPAY_KEY_SECRET || "";
+export const webhookSecret = () => process.env.RAZORPAY_WEBHOOK_SECRET || "";
 
-/** Verified trainer badge — ₹99, stored in paise as Razorpay expects. */
-export const BADGE_AMOUNT_PAISE = 9900;
+let client: Razorpay | null = null;
 
-export const razorpay = new Razorpay({
-  key_id: RAZORPAY_KEY_ID,
-  key_secret: RAZORPAY_KEY_SECRET,
-});
+/** Lazily constructed so the credentials are present by first use. */
+export const getRazorpay = (): Razorpay => {
+  if (!client) {
+    client = new Razorpay({ key_id: keyId(), key_secret: keySecret() });
+  }
+  return client;
+};

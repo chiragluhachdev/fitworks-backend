@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
 import { Trainer } from "../models/Trainer";
-import { razorpay, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET } from "../config/razorpay";
+import { getRazorpay, keyId, keySecret, webhookSecret } from "../config/razorpay";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 import {
   SUBSCRIPTION_AMOUNT_PAISE,
@@ -53,7 +53,7 @@ const applyPaidCycle = async (
 
 export const createTrainerPaymentOrder = async (req: Request, res: Response): Promise<any> => {
   try {
-    if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+    if (!keyId() || !keySecret()) {
       return res.status(500).json({ success: false, message: "Payment gateway is not configured" });
     }
 
@@ -73,7 +73,7 @@ export const createTrainerPaymentOrder = async (req: Request, res: Response): Pr
     const state = getSubscriptionState(trainer.subscription);
     const isRenewal = state.cyclesPaid > 0;
 
-    const order = await razorpay.orders.create({
+    const order = await getRazorpay().orders.create({
       amount: SUBSCRIPTION_AMOUNT_PAISE,
       currency: "INR",
       receipt: `fw_${Date.now().toString(36)}_${trainer._id.toString().slice(-8)}`.slice(0, 40),
@@ -91,7 +91,7 @@ export const createTrainerPaymentOrder = async (req: Request, res: Response): Pr
     return res.status(200).json({
       success: true,
       orderId: order.id,
-      keyId: RAZORPAY_KEY_ID,
+      keyId: keyId(),
       amount: SUBSCRIPTION_AMOUNT_PAISE,
       currency: "INR",
       isRenewal,
@@ -129,7 +129,7 @@ export const verifyTrainerPayment = async (req: Request, res: Response): Promise
 
     // Only our key secret can produce this, so a forged request cannot pass.
     const expected = crypto
-      .createHmac("sha256", RAZORPAY_KEY_SECRET)
+      .createHmac("sha256", keySecret())
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest("hex");
 
@@ -148,7 +148,7 @@ export const verifyTrainerPayment = async (req: Request, res: Response): Promise
       return res.status(400).json({ success: false, message: "Order does not belong to this profile" });
     }
 
-    const order: any = await razorpay.orders.fetch(razorpay_order_id);
+    const order: any = await getRazorpay().orders.fetch(razorpay_order_id);
     if (order.status !== "paid" || Number(order.amount_paid) < SUBSCRIPTION_AMOUNT_PAISE) {
       return res.status(400).json({
         success: false,
@@ -185,11 +185,11 @@ export const razorpayWebhook = async (req: Request, res: Response): Promise<any>
     const signature = req.headers["x-razorpay-signature"] as string | undefined;
     const raw = (req as any).rawBody;
 
-    if (!signature || !raw || !RAZORPAY_WEBHOOK_SECRET) {
+    if (!signature || !raw || !webhookSecret()) {
       return res.status(400).json({ success: false, message: "Invalid webhook request" });
     }
 
-    const expected = crypto.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(raw).digest("hex");
+    const expected = crypto.createHmac("sha256", webhookSecret()).update(raw).digest("hex");
     const provided = Buffer.from(signature, "utf8");
     const computed = Buffer.from(expected, "utf8");
     if (provided.length !== computed.length || !crypto.timingSafeEqual(provided, computed)) {

@@ -6,6 +6,7 @@ export interface IUser extends Document {
   email?: string;
   /** Bare 10-digit Indian mobile. Primary login identifier. */
   phone: string;
+  phoneVerified: boolean;
   passwordHash: string;
   role: "gym" | "trainer" | "admin";
   profileId?: mongoose.Types.ObjectId; // References Gym or Trainer document
@@ -32,6 +33,7 @@ const userSchema = new Schema<IUser>(
       trim: true,
       match: [/^[6-9]\d{9}$/, "Enter a valid 10-digit Indian mobile number"],
     },
+    phoneVerified: { type: Boolean, default: false },
     passwordHash: {
       type: String,
       required: [true, "Password is required"],

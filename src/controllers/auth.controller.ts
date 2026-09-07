@@ -7,6 +7,7 @@ import slugify from "slugify";
 import { Gym } from "../models/Gym";
 import { Trainer } from "../models/Trainer";
 import { normalizePhone, isValidPhone, looksLikeEmail } from "../utils/phone";
+import { consumePhoneVerification } from "./otp.controller";
 
 const generateToken = (userId: string, role: string, profileId?: string) => {
   return jwt.sign({ userId, role, profileId }, process.env.JWT_SECRET as string, {
@@ -47,6 +48,15 @@ export const registerGym = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "This mobile number is already registered. Please log in." });
     }
 
+    const gymPhoneVerified = await consumePhoneVerification(gymPhone, req.body.verificationToken, "registration");
+    if (!gymPhoneVerified) {
+      return res.status(400).json({
+        success: false,
+        message: "Please verify your mobile number with the OTP before continuing.",
+        code: "PHONE_NOT_VERIFIED",
+      });
+    }
+
     const normalizedEmail = email?.trim() ? String(email).trim().toLowerCase() : undefined;
     if (normalizedEmail && (await User.findOne({ email: normalizedEmail }))) {
       return res.status(400).json({ success: false, message: "This email is already registered. Please log in." });
@@ -56,6 +66,7 @@ export const registerGym = async (req: Request, res: Response) => {
     const user = await User.create({
       email: normalizedEmail,
       phone: gymPhone,
+      phoneVerified: true,
       passwordHash: password,
       role: "gym",
     });
@@ -133,6 +144,16 @@ export const registerTrainer = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "This mobile number is already registered. Please log in." });
     }
 
+    // The number must have been proven by OTP in this session.
+    const phoneVerified = await consumePhoneVerification(phone, req.body.verificationToken, "registration");
+    if (!phoneVerified) {
+      return res.status(400).json({
+        success: false,
+        message: "Please verify your mobile number with the OTP before continuing.",
+        code: "PHONE_NOT_VERIFIED",
+      });
+    }
+
     // Email stays optional; only enforce uniqueness when one is supplied.
     const normalizedEmail = email?.trim() ? String(email).trim().toLowerCase() : undefined;
     if (normalizedEmail) {
@@ -146,6 +167,7 @@ export const registerTrainer = async (req: Request, res: Response) => {
     const user = await User.create({
       email: normalizedEmail,
       phone,
+      phoneVerified: true,
       passwordHash: password,
       role: "trainer",
     });
@@ -336,3 +358,74 @@ export const updatePassword = async (req: Request, res: Response) => {
   }
 };
 
+
+
+/**
+ * Passwordless login: the client proves the number via /otp/verify, then
+ * presents that token here. Same session payload as password login.
+ */
+export const loginWithOtp = async (req: Request, res: Response) => {
+  try {
+    const phone = normalizePhone(req.body.phone);
+    const { verificationToken } = req.body;
+
+    if (!isValidPhone(phone) || !verificationToken) {
+      return res.status(400).json({ success: false, message: "Mobile number and verification are required" });
+    }
+
+    const verified = await consumePhoneVerification(phone, verificationToken, "login");
+    if (!verified) {
+      return res.status(401).json({ success: false, message: "Verification expired. Please request a new OTP." });
+    }
+
+    const user = await User.findOne({ phone });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "No account found for this mobile number" });
+    }
+
+    let slug = "";
+    let displayName = "";
+
+    if (user.role === "gym") {
+      const gym = (await Gym.findOne({ userId: user._id })) || (user.profileId ? await Gym.findById(user.profileId) : null);
+      if (gym) {
+        slug = gym.slug;
+        displayName = gym.gymName;
+        user.profileId = gym._id as any;
+      }
+    } else if (user.role === "trainer") {
+      const trainer =
+        (await Trainer.findOne({ userId: user._id })) || (user.profileId ? await Trainer.findById(user.profileId) : null);
+      if (trainer) {
+        slug = trainer.slug;
+        displayName = trainer.personal?.fullName;
+        user.profileId = trainer._id as any;
+      }
+    }
+
+    if (!user.phoneVerified) {
+      user.phoneVerified = true;
+      await user.save();
+    }
+
+    const token = generateToken(user.id, user.role, user.profileId?.toString());
+
+    res.status(200).json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        profileId: user.profileId,
+        slug,
+        gymName: user.role === "gym" ? displayName : undefined,
+        fullName: user.role === "trainer" ? displayName : undefined,
+      },
+    });
+  } catch (error: any) {
+    console.error("OTP Login Error:", error);
+    res.status(500).json({ success: false, message: "Server error during login" });
+  }
+};
