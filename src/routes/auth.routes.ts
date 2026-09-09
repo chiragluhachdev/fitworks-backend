@@ -8,6 +8,6 @@ router.post("/register/gym", registerGym);
 router.post("/register/trainer", registerTrainer);
 router.post("/login", login);
 router.post("/login-otp", loginWithOtp);
-router.put("/update-password", updatePassword);
+router.put("/update-password", protect, updatePassword);
 
 export default router;

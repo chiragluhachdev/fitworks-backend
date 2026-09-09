@@ -44,6 +44,12 @@ export const sendOtp = async (req: Request, res: Response): Promise<any> => {
     const now = new Date();
     const existing = await OtpToken.findOne({ phone, purpose, verified: false }).sort({ createdAt: -1 });
 
+    // Counters have to survive the delete-and-recreate below. Counting documents
+    // instead would always come back as 1, which is why the hourly cap never
+    // actually fired.
+    let sendCount = 1;
+    let windowStartedAt = now;
+
     if (existing) {
       const sinceLast = (now.getTime() - existing.lastSentAt.getTime()) / 1000;
       if (sinceLast < OTP_RESEND_COOLDOWN_SECONDS) {
@@ -53,17 +59,23 @@ export const sendOtp = async (req: Request, res: Response): Promise<any> => {
           retryAfter: Math.ceil(OTP_RESEND_COOLDOWN_SECONDS - sinceLast),
         });
       }
+
+      const openedAt = existing.windowStartedAt ?? existing.createdAt;
+      if (now.getTime() - new Date(openedAt).getTime() < 3600_000) {
+        sendCount = (existing.sendCount || 1) + 1;
+        windowStartedAt = new Date(openedAt);
+      }
     }
 
     // Rolling hourly cap per number, so a single number can't drain the wallet.
-    const sentThisHour = await OtpToken.countDocuments({
-      phone,
-      createdAt: { $gt: new Date(now.getTime() - 3600_000) },
-    });
-    if (sentThisHour >= OTP_MAX_SENDS_PER_HOUR) {
+    if (sendCount > OTP_MAX_SENDS_PER_HOUR) {
+      const minutesLeft = Math.ceil(
+        (3600_000 - (now.getTime() - windowStartedAt.getTime())) / 60_000
+      );
       return res.status(429).json({
         success: false,
-        message: "Too many OTP requests. Please try again in an hour.",
+        message: `Too many OTP requests. Please try again in ${minutesLeft} minute${minutesLeft === 1 ? "" : "s"}.`,
+        retryAfter: minutesLeft * 60,
       });
     }
 
@@ -72,7 +84,15 @@ export const sendOtp = async (req: Request, res: Response): Promise<any> => {
 
     // One live challenge per number+purpose — replace any earlier unverified one.
     await OtpToken.deleteMany({ phone, purpose, verified: false });
-    await OtpToken.create({ phone, codeHash: hashOtp(code), purpose, expiresAt, lastSentAt: now });
+    await OtpToken.create({
+      phone,
+      codeHash: hashOtp(code),
+      purpose,
+      expiresAt,
+      lastSentAt: now,
+      sendCount,
+      windowStartedAt,
+    });
 
     const sms = await sendSms(phone, otpMessage(code, purpose));
     if (!sms.ok) {

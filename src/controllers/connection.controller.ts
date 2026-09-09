@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { Connection } from "../models/Connection";
+import { Trainer } from "../models/Trainer";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 
 export const sendConnectionRequest = async (req: Request, res: Response) => {
@@ -10,6 +11,13 @@ export const sendConnectionRequest = async (req: Request, res: Response) => {
 
     const gymId = req.user.profileId;
     const { trainerId, message } = req.body;
+
+    // Guard against invitations addressed to a profile that no longer exists —
+    // those render as blank rows in every dashboard that lists them.
+    const trainer = await Trainer.findById(trainerId).select("_id");
+    if (!trainer) {
+      return res.status(404).json({ success: false, message: "That trainer profile no longer exists" });
+    }
 
     const connection = await Connection.create({
       gymId,

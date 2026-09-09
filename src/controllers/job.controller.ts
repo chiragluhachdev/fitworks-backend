@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import { Job } from "../models/Job";
 import { Gym } from "../models/Gym";
 import { Trainer } from "../models/Trainer";
+import { Application } from "../models/Application";
+import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 import { getJobAccess } from "../utils/subscription";
 
 export const createJob = async (req: Request, res: Response) => {
@@ -30,6 +32,12 @@ export const createJob = async (req: Request, res: Response) => {
 
     if (!targetGymId) {
       return res.status(400).json({ success: false, message: "Gym ID or slug is required" });
+    }
+
+    // The gym id arrives in the body, so it has to be checked — otherwise one
+    // gym could post vacancies in another gym's name.
+    if (!isOwnerOrAdmin(req.user, targetGymId)) {
+      return res.status(403).json({ success: false, message: "Not authorized to post vacancies for this gym" });
     }
 
     const job = await Job.create({
@@ -128,10 +136,17 @@ export const getJobById = async (req: Request, res: Response) => {
 
 export const updateJob = async (req: Request, res: Response) => {
   try {
-    const job = await Job.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true, runValidators: true });
-    if (!job) {
+    const existing = await Job.findById(req.params.id);
+    if (!existing) {
       return res.status(404).json({ success: false, message: "Job not found" });
     }
+    if (!isOwnerOrAdmin(req.user, existing.gymId)) {
+      return res.status(403).json({ success: false, message: "Not authorized to edit this vacancy" });
+    }
+
+    // gymId is never reassignable through this route.
+    const { gymId: _ignored, ...updates } = req.body ?? {};
+    const job = await Job.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true, runValidators: true });
     res.status(200).json({ success: true, data: job });
   } catch (error: any) {
     console.error("Update Job Error:", error);
@@ -141,10 +156,19 @@ export const updateJob = async (req: Request, res: Response) => {
 
 export const deleteJob = async (req: Request, res: Response) => {
   try {
-    const job = await Job.findByIdAndDelete(req.params.id);
+    const job = await Job.findById(req.params.id);
     if (!job) {
       return res.status(404).json({ success: false, message: "Job not found" });
     }
+    if (!isOwnerOrAdmin(req.user, job.gymId)) {
+      return res.status(403).json({ success: false, message: "Not authorized to remove this vacancy" });
+    }
+
+    await Job.findByIdAndDelete(req.params.id);
+    // Applications pointing at a deleted vacancy would render as blank rows in
+    // both dashboards, so they go with it.
+    await Application.deleteMany({ jobId: job._id });
+
     res.status(200).json({ success: true, message: "Vacancy removed successfully" });
   } catch (error: any) {
     console.error("Delete Job Error:", error);

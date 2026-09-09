@@ -26,6 +26,11 @@ export const updateGymProfile = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Gym not found" });
     }
 
+    // A gym account may only edit itself. Admins go through /api/admin/gyms/:id.
+    if (!isOwnerOrAdmin(req.user, gym._id)) {
+      return res.status(403).json({ success: false, message: "Not authorized to edit this gym" });
+    }
+
     if (req.body.gymName) gym.gymName = req.body.gymName;
     if (req.body.gymLogo !== undefined) gym.gymLogo = req.body.gymLogo;
     if (req.body.gymDescription) gym.gymDescription = req.body.gymDescription;

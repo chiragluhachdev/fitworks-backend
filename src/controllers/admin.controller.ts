@@ -57,11 +57,19 @@ export const getUsers = async (req: Request, res: Response) => {
 export const getTrainers = async (req: Request, res: Response) => {
   try {
     const trainers = await Trainer.find().sort({ createdAt: -1 });
-    // Attach derived membership status so admin can see who has lapsed.
-    const data = trainers.map((t) => ({
-      ...t.toObject(),
-      subscriptionState: getSubscriptionState(t.subscription),
-    }));
+    // Attach derived membership status so admin can see who has lapsed, plus the
+    // combined answer to "is this trainer actually live on the platform?" —
+    // approved by an admin AND currently paid up.
+    const data = trainers.map((t) => {
+      const subscriptionState = getSubscriptionState(t.subscription);
+      return {
+        ...t.toObject(),
+        subscriptionState,
+        accountActive: t.verificationStatus === "verified" && subscriptionState.isActive,
+        hasEverPaid: (t.subscription?.cyclesPaid || 0) > 0,
+        totalPaid: (t.subscription?.history || []).reduce((sum, h) => sum + (h.amount || 0), 0),
+      };
+    });
     res.status(200).json({ success: true, data });
   } catch (error: any) {
     res.status(500).json({ success: false, message: "Server error" });
@@ -170,16 +178,52 @@ export const deleteGym = async (req: Request, res: Response) => {
     }
 
     await Gym.findByIdAndDelete(req.params.id);
-    // Also clean up vacancies associated with this gym
+    // Everything that pointed at this gym goes too. Leaving orphans behind is
+    // what makes deleted accounts keep half-appearing across the app.
     await Job.deleteMany({ gymId: gym._id });
+    await Application.deleteMany({ gymId: gym._id });
+    await Connection.deleteMany({ gymId: gym._id });
+    if (gym.userId) await User.findByIdAndDelete(gym.userId);
 
-    res.status(200).json({ success: true, message: "Gym deleted successfully" });
+    res.status(200).json({
+      success: true,
+      message: "Gym, its login, vacancies, applications and invitations were all removed",
+    });
   } catch (error: any) {
     console.error("Admin Delete Gym Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
+
+/**
+ * Removes a trainer completely: profile, login, applications and invitations.
+ *
+ * Deleting only the Trainer document (straight from the database, say) leaves
+ * the User row behind — the person can still log in, and their dashboard URL
+ * still resolves. This is the supported way to remove someone.
+ */
+export const deleteTrainer = async (req: Request, res: Response) => {
+  try {
+    const trainer = await Trainer.findById(req.params.id);
+    if (!trainer) {
+      return res.status(404).json({ success: false, message: "Trainer not found" });
+    }
+
+    await Trainer.findByIdAndDelete(trainer._id);
+    await Application.deleteMany({ trainerId: trainer._id });
+    await Connection.deleteMany({ trainerId: trainer._id });
+    if (trainer.userId) await User.findByIdAndDelete(trainer.userId);
+
+    res.status(200).json({
+      success: true,
+      message: `${trainer.personal?.fullName || "Trainer"} and their login, applications and invitations were removed`,
+    });
+  } catch (error: any) {
+    console.error("Admin Delete Trainer Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
 /** Everything admin needs on one trainer: profile, account, documents, billing. */
 export const getTrainerDetail = async (req: Request, res: Response) => {

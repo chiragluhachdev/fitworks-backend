@@ -10,7 +10,10 @@ export interface IOtpToken extends Document {
   /** Set once verified; the client presents this to complete the action. */
   verificationToken?: string;
   lastSentAt: Date;
+  /** Sends so far in the current rolling hour, carried across regenerations. */
   sendCount: number;
+  /** Start of that rolling hour. */
+  windowStartedAt: Date;
   createdAt: Date;
 }
 
@@ -25,6 +28,7 @@ const otpTokenSchema = new Schema<IOtpToken>(
     verificationToken: { type: String, index: true },
     lastSentAt: { type: Date, default: Date.now },
     sendCount: { type: Number, default: 1 },
+    windowStartedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
 );

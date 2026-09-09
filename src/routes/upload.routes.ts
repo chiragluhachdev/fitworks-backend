@@ -1,8 +1,18 @@
 import express, { Request, Response } from "express";
 import multer from "multer";
+import rateLimit from "express-rate-limit";
 import cloudinary from "../config/cloudinary";
 
 const router = express.Router();
+
+// Signup uploads certificates before an account exists, so this route can't
+// require a token. Cap it by IP instead — otherwise it's an open pipe into the
+// Cloudinary account.
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 25,
+  message: { success: false, message: "Too many uploads. Please try again in a few minutes." },
+});
 
 // Configure multer memory storage
 const storage = multer.memoryStorage();
@@ -31,7 +41,7 @@ const upload = multer({
 });
 
 // Single file upload to Cloudinary
-router.post("/", upload.single("file"), async (req: Request, res: Response): Promise<any> => {
+router.post("/", uploadLimiter, upload.single("file"), async (req: Request, res: Response): Promise<any> => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: "No file uploaded" });
@@ -77,7 +87,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response): Pro
 });
 
 // Multiple files upload
-router.post("/multiple", upload.array("files", 5), async (req: Request, res: Response): Promise<any> => {
+router.post("/multiple", uploadLimiter, upload.array("files", 5), async (req: Request, res: Response): Promise<any> => {
   try {
     const files = req.files as Express.Multer.File[];
     if (!files || files.length === 0) {

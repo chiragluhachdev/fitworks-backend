@@ -71,30 +71,38 @@ export const registerGym = async (req: Request, res: Response) => {
       role: "gym",
     });
 
-    // 2. Generate slug and create Gym
-    const slug = await generateUniqueSlug(gymName, Gym);
-    const gym = await Gym.create({
-      userId: user._id,
-      gymName,
-      gymDescription: gymDescription || `${gymName} is a premier fitness facility.`,
-      address: address || { street: "Main St", city: "Mumbai", state: "Maharashtra", pincode: "400001" },
-      numberOfLocations: numberOfLocations || 1,
-      hiringInformation: hiringInformation || {
-        trainersRequired: 2,
-        trainerTypes: ["General Fitness"],
-        preferredExperience: "1-3 Years",
-        salaryBudget: "25,000 - 35,000",
-        hiringFrequency: "Regular",
-      },
-      contactPerson: contactPerson || {
-        name: "Gym Owner",
-        designation: "Owner",
-        phone: "+91 99999 99999",
-      },
-      website,
-      instagram,
-      slug,
-    });
+    // 2. Generate slug and create Gym.
+    // If anything below fails the account must not survive: a User row with no
+    // profile permanently locks the phone number out of registering again.
+    let gym;
+    try {
+      const slug = await generateUniqueSlug(gymName, Gym);
+      gym = await Gym.create({
+        userId: user._id,
+        gymName,
+        gymDescription: gymDescription || `${gymName} is a premier fitness facility.`,
+        address: address || { street: "Main St", city: "Mumbai", state: "Maharashtra", pincode: "400001" },
+        numberOfLocations: numberOfLocations || 1,
+        hiringInformation: hiringInformation || {
+          trainersRequired: 2,
+          trainerTypes: ["General Fitness"],
+          preferredExperience: "1-3 Years",
+          salaryBudget: "25,000 - 35,000",
+          hiringFrequency: "Regular",
+        },
+        contactPerson: contactPerson || {
+          name: "Gym Owner",
+          designation: "Owner",
+          phone: "+91 99999 99999",
+        },
+        website,
+        instagram,
+        slug,
+      });
+    } catch (profileError) {
+      await User.findByIdAndDelete(user._id);
+      throw profileError;
+    }
 
     // 3. Link gym to user
     user.profileId = gym._id as mongoose.Types.ObjectId;
@@ -184,34 +192,42 @@ export const registerTrainer = async (req: Request, res: Response) => {
       }
     }
 
-    const trainer = await Trainer.create({
-      userId: user._id,
-      personal: {
-        fullName: personal.fullName.trim(),
-        phone,
-        email: normalizedEmail,
-        dateOfBirth: parsedDob,
-        gender: personal.gender || "Male",
-        city: personal.city || "Mumbai",
-        location: personal.location || personal.city || "Mumbai",
-      },
-      professional: {
-        professionalTitle: professional?.professionalTitle || "Certified Fitness Trainer",
-        yearsOfExperience: Number(professional?.yearsOfExperience) || 1,
-        specializations: professional?.specializations && professional.specializations.length > 0 ? professional.specializations : ["General Fitness"],
-        skills: professional?.skills && professional.skills.length > 0 ? professional.skills : ["Fitness Coaching"],
-        education: professional?.education || "Certified Trainer",
-        bio: professional?.bio || "Passionate fitness professional dedicated to helping clients achieve peak wellness.",
-      },
-      workPreferences: workPreferences || {
-        expectedMonthlySalary: "30,000",
-        employmentType: ["Full-time"],
-        availability: "Immediate",
-        willingToRelocate: false,
-      },
-      verificationDocuments: verificationDocuments || [],
-      slug,
-    });
+    // If the profile fails to save, roll the account back — otherwise the phone
+    // number is taken forever by a User with nothing attached to it.
+    let trainer;
+    try {
+      trainer = await Trainer.create({
+        userId: user._id,
+        personal: {
+          fullName: personal.fullName.trim(),
+          phone,
+          email: normalizedEmail,
+          dateOfBirth: parsedDob,
+          gender: personal.gender || "Male",
+          city: personal.city || "Mumbai",
+          location: personal.location || personal.city || "Mumbai",
+        },
+        professional: {
+          professionalTitle: professional?.professionalTitle || "Certified Fitness Trainer",
+          yearsOfExperience: Number(professional?.yearsOfExperience) || 1,
+          specializations: professional?.specializations && professional.specializations.length > 0 ? professional.specializations : ["General Fitness"],
+          skills: professional?.skills && professional.skills.length > 0 ? professional.skills : ["Fitness Coaching"],
+          education: professional?.education || "Certified Trainer",
+          bio: professional?.bio || "Passionate fitness professional dedicated to helping clients achieve peak wellness.",
+        },
+        workPreferences: workPreferences || {
+          expectedMonthlySalary: "30,000",
+          employmentType: ["Full-time"],
+          availability: "Immediate",
+          willingToRelocate: false,
+        },
+        verificationDocuments: verificationDocuments || [],
+        slug,
+      });
+    } catch (profileError) {
+      await User.findByIdAndDelete(user._id);
+      throw profileError;
+    }
 
     // 3. Link trainer to user
     user.profileId = trainer._id as mongoose.Types.ObjectId;
@@ -308,6 +324,18 @@ export const login = async (req: Request, res: Response) => {
       }
     }
 
+    // A profile that no longer exists (deleted by an admin) must not fall back
+    // to some other account's slug — that used to send the user into a stranger's
+    // dashboard URL. Report it instead so the client can react honestly.
+    if (!slug && user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        code: "PROFILE_MISSING",
+        message:
+          "This account no longer has a profile attached. Please contact FitWorks support.",
+      });
+    }
+
     const token = generateToken(user.id, user.role, user.profileId?.toString());
 
     res.status(200).json({
@@ -316,9 +344,10 @@ export const login = async (req: Request, res: Response) => {
       user: {
         id: user.id,
         email: user.email,
+        phone: user.phone,
         role: user.role,
         profileId: user.profileId,
-        slug: slug || (user.role === "gym" ? "powerfit-studio" : "rahul-sharma"),
+        slug,
         gymName: user.role === "gym" ? displayName : undefined,
         fullName: user.role === "trainer" ? displayName : undefined,
       },
@@ -331,21 +360,31 @@ export const login = async (req: Request, res: Response) => {
 
 export const updatePassword = async (req: Request, res: Response) => {
   try {
-    const { currentPassword, newPassword, email } = req.body;
-    let query: any = {};
-    if (req.user?.userId) query._id = req.user.userId;
-    else if (email) query.email = email;
+    const { currentPassword, newPassword } = req.body;
 
-    const user = await User.findOne(query).select("+passwordHash");
+    // Identity comes from the verified token only. Never from the request body —
+    // trusting an `email` field here would let anyone reset anyone's password.
+    if (!req.user?.userId) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Both your current and new password are required",
+      });
+    }
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ success: false, message: "New password must be at least 6 characters" });
+    }
+
+    const user = await User.findById(req.user.userId).select("+passwordHash");
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    if (currentPassword) {
-      const isMatch = await user.comparePassword(currentPassword);
-      if (!isMatch) {
-        return res.status(400).json({ success: false, message: "Current password is incorrect" });
-      }
+    const isMatch = await user.comparePassword(currentPassword);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, message: "Current password is incorrect" });
     }
 
     user.passwordHash = newPassword;
@@ -406,6 +445,15 @@ export const loginWithOtp = async (req: Request, res: Response) => {
     if (!user.phoneVerified) {
       user.phoneVerified = true;
       await user.save();
+    }
+
+    if (!slug && user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        code: "PROFILE_MISSING",
+        message:
+          "This account no longer has a profile attached. Please contact FitWorks support.",
+      });
     }
 
     const token = generateToken(user.id, user.role, user.profileId?.toString());

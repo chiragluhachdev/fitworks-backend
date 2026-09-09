@@ -12,6 +12,7 @@ import {
   deleteGym,
   getTrainerDetail,
   getSubscriptions,
+  deleteTrainer,
 } from "../controllers/admin.controller";
 import { protect, authorize } from "../middleware/auth.middleware";
 
@@ -40,5 +41,8 @@ router.delete("/gyms/:id", deleteGym);
 
 // Verification actions
 router.put("/trainers/:id/verify", updateTrainerVerification);
+
+// Removes the profile, its login and every application/invitation attached.
+router.delete("/trainers/:id", deleteTrainer);
 
 export default router;

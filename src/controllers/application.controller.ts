@@ -120,13 +120,14 @@ export const deleteApplication = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Application not found" });
     }
 
-    // Role check: trainer can delete own application, or admin can delete
-    if (
-      req.user &&
-      req.user.role === "trainer" &&
-      req.user.profileId &&
-      application.trainerId.toString() !== req.user.profileId
-    ) {
+    // Withdrawing an application is the trainer's call (or an admin's). A gym
+    // rejects an application, it does not erase it.
+    const isOwnTrainer =
+      req.user?.role === "trainer" &&
+      !!req.user.profileId &&
+      application.trainerId.toString() === req.user.profileId;
+
+    if (req.user?.role !== "admin" && !isOwnTrainer) {
       return res.status(403).json({ success: false, message: "Not authorized to delete this application" });
     }
 
