@@ -99,9 +99,10 @@ const trainerSchema = new Schema<ITrainer>(
     verificationStatus: {
       type: String,
       enum: ["pending", "verified", "rejected"],
-      // New profiles start verified; admin can move them to pending/rejected
-      // after reviewing documents.
-      default: "verified",
+      // Verification is the first of two gates and is never granted on signup —
+      // an admin approves the documents. Paying the ₹99 is the second gate.
+      // A profile only goes live to gyms once both are satisfied.
+      default: "pending",
     },
     verificationDocuments: [{ type: String }],
     subscription: {
