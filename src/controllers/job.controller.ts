@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { Job } from "../models/Job";
 import { Gym } from "../models/Gym";
+import { Trainer } from "../models/Trainer";
+import { getJobAccess } from "../utils/subscription";
 
 export const createJob = async (req: Request, res: Response) => {
   try {
@@ -52,6 +54,25 @@ export const createJob = async (req: Request, res: Response) => {
 
 export const getJobs = async (req: Request, res: Response) => {
   try {
+    // A signed-in trainer must be approved and on an active membership before
+    // vacancies are returned. Gyms and admins are unaffected.
+    if (req.user?.role === "trainer") {
+      const trainer = await Trainer.findById(req.user.profileId).select(
+        "verificationStatus subscription"
+      );
+      const access = getJobAccess(trainer);
+      if (!access.allowed) {
+        return res.status(403).json({
+          success: false,
+          locked: true,
+          reason: access.reason,
+          title: access.title,
+          message: access.message,
+          data: [],
+        });
+      }
+    }
+
     const { status = "open", specialization, location, type } = req.query;
     const query: any = {};
 

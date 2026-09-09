@@ -179,3 +179,89 @@ export const deleteGym = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
+/** Everything admin needs on one trainer: profile, account, documents, billing. */
+export const getTrainerDetail = async (req: Request, res: Response) => {
+  try {
+    const trainer = await Trainer.findById(req.params.id);
+    if (!trainer) {
+      return res.status(404).json({ success: false, message: "Trainer not found" });
+    }
+
+    const account = await User.findById(trainer.userId).select("email phone phoneVerified role createdAt");
+    const applications = await Application.find({ trainerId: trainer._id })
+      .populate("jobId", "position salaryRange location")
+      .populate("gymId", "gymName slug")
+      .sort({ createdAt: -1 });
+    const connections = await Connection.find({ trainerId: trainer._id })
+      .populate("gymId", "gymName slug")
+      .sort({ createdAt: -1 });
+
+    const subscription = getSubscriptionState(trainer.subscription);
+    const history = [...(trainer.subscription?.history || [])].sort(
+      (a, b) => new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime()
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        trainer,
+        account,
+        subscription,
+        billingHistory: history,
+        applications,
+        connections,
+        counts: {
+          applications: applications.length,
+          connections: connections.length,
+          documents: trainer.verificationDocuments?.length || 0,
+        },
+      },
+    });
+  } catch (error: any) {
+    console.error("Admin Trainer Detail Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/** Membership ledger across all trainers, with revenue totals. */
+export const getSubscriptions = async (req: Request, res: Response) => {
+  try {
+    const trainers = await Trainer.find().sort({ "subscription.currentPeriodEnd": -1 });
+
+    const rows = trainers.map((t) => {
+      const state = getSubscriptionState(t.subscription);
+      const history = t.subscription?.history || [];
+      return {
+        _id: t._id,
+        slug: t.slug,
+        fullName: t.personal?.fullName,
+        phone: t.personal?.phone,
+        city: t.personal?.city,
+        verificationStatus: t.verificationStatus,
+        subscription: state,
+        cyclesPaid: t.subscription?.cyclesPaid || 0,
+        amountPerCycle: t.subscription?.amountPerCycle ?? 99,
+        lastPaidAt: history.length ? history[history.length - 1].paidAt : null,
+        totalPaid: history.reduce((sum, h) => sum + (h.amount || 0), 0),
+      };
+    });
+
+    const summary = {
+      total: rows.length,
+      active: rows.filter((r) => r.subscription.status === "active").length,
+      expiringSoon: rows.filter((r) => r.subscription.status === "expiring_soon").length,
+      expired: rows.filter((r) => r.subscription.status === "expired").length,
+      neverPaid: rows.filter((r) => r.subscription.status === "inactive").length,
+      // Recorded as billed, never recomputed from current pricing.
+      lifetimeRevenue: rows.reduce((sum, r) => sum + r.totalPaid, 0),
+      monthlyRecurring: rows.filter((r) => r.subscription.isActive).reduce((s, r) => s + r.amountPerCycle, 0),
+    };
+
+    res.status(200).json({ success: true, summary, data: rows });
+  } catch (error: any) {
+    console.error("Admin Subscriptions Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};

@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import { Application } from "../models/Application";
 import { Job } from "../models/Job";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
+import { Trainer } from "../models/Trainer";
+import { getJobAccess } from "../utils/subscription";
 
 export const applyForJob = async (req: Request, res: Response) => {
   try {
@@ -10,7 +12,19 @@ export const applyForJob = async (req: Request, res: Response) => {
     }
 
     const { jobId, coverLetter } = req.body;
-    const trainerId = req.user.profileId; // In production this comes from the auth token
+    const trainerId = req.user.profileId;
+
+    const trainer = await Trainer.findById(trainerId).select("verificationStatus subscription");
+    const access = getJobAccess(trainer);
+    if (!access.allowed) {
+      return res.status(403).json({
+        success: false,
+        locked: true,
+        reason: access.reason,
+        title: access.title,
+        message: access.message,
+      });
+    }
 
     const job = await Job.findById(jobId);
     if (!job) {

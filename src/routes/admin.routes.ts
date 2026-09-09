@@ -10,6 +10,8 @@ import {
   updateTrainerVerification,
   updateGym,
   deleteGym,
+  getTrainerDetail,
+  getSubscriptions,
 } from "../controllers/admin.controller";
 import { protect, authorize } from "../middleware/auth.middleware";
 
@@ -29,6 +31,8 @@ router.get("/gyms", getGyms);
 router.get("/vacancies", getVacancies);
 router.get("/applications", getApplications);
 router.get("/connections", getConnections);
+router.get("/subscriptions", getSubscriptions);
+router.get("/trainers/:id", getTrainerDetail);
 
 // Gym actions
 router.put("/gyms/:id", updateGym);

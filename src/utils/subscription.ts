@@ -70,3 +70,55 @@ export const nextPeriod = (currentEnd?: Date | null) => {
 export const activeSubscriptionFilter = () => ({
   "subscription.currentPeriodEnd": { $gt: new Date() },
 });
+
+export type AccessBlockReason = "pending_review" | "rejected" | "subscription_inactive" | null;
+
+export interface JobAccess {
+  allowed: boolean;
+  reason: AccessBlockReason;
+  title: string;
+  message: string;
+}
+
+/**
+ * Whether a trainer may browse and apply to gym vacancies.
+ *
+ * Two independent gates: the profile must be approved, and the membership must
+ * be paid. Verification is checked first because it's the more fundamental
+ * blocker — no amount of paying fixes a rejected profile.
+ */
+export const getJobAccess = (trainer: any): JobAccess => {
+  const status = trainer?.verificationStatus;
+
+  if (status === "pending") {
+    return {
+      allowed: false,
+      reason: "pending_review",
+      title: "Your profile is under review",
+      message:
+        "Our team is checking your documents. Once approved, gym vacancies will unlock here — usually within 24 hours.",
+    };
+  }
+
+  if (status === "rejected") {
+    return {
+      allowed: false,
+      reason: "rejected",
+      title: "Your profile needs attention",
+      message:
+        "We couldn't verify the documents you submitted. Please re-upload valid certificates and ID from the Verification page.",
+    };
+  }
+
+  if (!getSubscriptionState(trainer?.subscription).isActive) {
+    return {
+      allowed: false,
+      reason: "subscription_inactive",
+      title: "Activate your membership to apply",
+      message:
+        "Gym vacancies are open to active members. Activate for ₹99/month to browse and apply to every open role.",
+    };
+  }
+
+  return { allowed: true, reason: null, title: "", message: "" };
+};

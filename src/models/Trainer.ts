@@ -99,7 +99,9 @@ const trainerSchema = new Schema<ITrainer>(
     verificationStatus: {
       type: String,
       enum: ["pending", "verified", "rejected"],
-      default: "pending",
+      // New profiles start verified; admin can move them to pending/rejected
+      // after reviewing documents.
+      default: "verified",
     },
     verificationDocuments: [{ type: String }],
     subscription: {
