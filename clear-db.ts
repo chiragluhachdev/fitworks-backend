@@ -14,6 +14,7 @@ import { Trainer } from "./src/models/Trainer";
 import { Job } from "./src/models/Job";
 import { Application } from "./src/models/Application";
 import { Connection } from "./src/models/Connection";
+import { OtpToken } from "./src/models/OtpToken";
 
 dotenv.config();
 
@@ -37,6 +38,8 @@ async function main() {
     "jobs/vacancies": await Job.countDocuments(),
     applications: await Application.countDocuments(),
     connections: await Connection.countDocuments(),
+    // Live OTP challenges are tied to numbers that are about to stop existing.
+    "otp challenges": await OtpToken.countDocuments(),
   };
 
   console.log("WILL DELETE:");
@@ -67,6 +70,7 @@ async function main() {
     jobs: await Job.deleteMany({}),
     applications: await Application.deleteMany({}),
     connections: await Connection.deleteMany({}),
+    otpTokens: await OtpToken.deleteMany({}),
   };
 
   console.log("DELETED:");
