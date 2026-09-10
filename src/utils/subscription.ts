@@ -78,6 +78,10 @@ export interface JobAccess {
   reason: AccessBlockReason;
   title: string;
   message: string;
+  /** Lets the review screen offer activation while the trainer waits. */
+  membershipActive: boolean;
+  /** Renewal rather than first activation — changes the wording. */
+  hasLapsed: boolean;
 }
 
 /**
@@ -89,6 +93,11 @@ export interface JobAccess {
  */
 export const getJobAccess = (trainer: any): JobAccess => {
   const status = trainer?.verificationStatus;
+  const state = getSubscriptionState(trainer?.subscription);
+  // Carried on every branch so the client can tailor the screen: offer
+  // activation while a review is still pending, and say "renew" rather than
+  // "activate" to someone who has paid before.
+  const context = { membershipActive: state.isActive, hasLapsed: state.cyclesPaid > 0 };
 
   if (status === "pending") {
     return {
@@ -96,7 +105,8 @@ export const getJobAccess = (trainer: any): JobAccess => {
       reason: "pending_review",
       title: "Your profile is under review",
       message:
-        "Our team is checking your documents. Once approved, gym vacancies will unlock here — usually within 24 hours.",
+        "Our team is checking your documents. Once approved, gym vacancies unlock here — usually within 24 hours.",
+      ...context,
     };
   }
 
@@ -106,19 +116,21 @@ export const getJobAccess = (trainer: any): JobAccess => {
       reason: "rejected",
       title: "Your profile needs attention",
       message:
-        "We couldn't verify the documents you submitted. Please re-upload valid certificates and ID from the Verification page.",
+        "We couldn't verify the documents you submitted. Re-upload a valid certificate and a clear government ID to get approved.",
+      ...context,
     };
   }
 
-  if (!getSubscriptionState(trainer?.subscription).isActive) {
+  if (!state.isActive) {
     return {
       allowed: false,
       reason: "subscription_inactive",
-      title: "Activate your membership to apply",
+      title: "Activate your membership",
       message:
-        "Gym vacancies are open to active members. Activate for ₹99/month to browse and apply to every open role.",
+        "FitWorks is a paid platform for trainers. Activate your ₹99/month membership to browse vacancies, apply to roles and be discovered by hiring gyms.",
+      ...context,
     };
   }
 
-  return { allowed: true, reason: null, title: "", message: "" };
+  return { allowed: true, reason: null, title: "", message: "", ...context };
 };

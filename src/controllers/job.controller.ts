@@ -76,6 +76,8 @@ export const getJobs = async (req: Request, res: Response) => {
           reason: access.reason,
           title: access.title,
           message: access.message,
+          membershipActive: access.membershipActive,
+          hasLapsed: access.hasLapsed,
           data: [],
         });
       }
