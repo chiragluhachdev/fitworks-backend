@@ -1,6 +1,6 @@
 /* eslint-disable */
 // @ts-nocheck
-// Seed script — run with: npx tsx seed.ts
+// Seed script — run with: npx tsx seed.tsx
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import { User } from "./src/models/User";
