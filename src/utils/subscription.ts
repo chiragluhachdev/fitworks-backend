@@ -75,27 +75,19 @@ export interface JobAccess {
 /**
  * Whether a trainer may browse and apply to gym vacancies.
  *
- * Two independent gates: the profile must be approved, and the ₹99 must be
- * paid. Verification is checked first because it's the more fundamental
- * blocker — no amount of paying fixes a rejected profile.
+ * Paying the one-time ₹99 is the gate. Awaiting verification does not hold a
+ * trainer back: an unreviewed profile is the default state of every signup, and
+ * making paying customers wait on our review queue costs them the thing they
+ * just bought. Verification is a trust badge gyms see on an application, not a
+ * turnstile.
+ *
+ * An explicit rejection still blocks, because that is a deliberate decision
+ * about a specific profile rather than a queue we haven't got to yet.
  */
 export const getJobAccess = (trainer: any): JobAccess => {
   const status = trainer?.verificationStatus;
   const state = getActivationState(trainer?.subscription);
-  // Carried on every branch so the review screen can offer activation while the
-  // trainer waits, rather than making them come back for a second step.
   const context = { isActivated: state.isActive };
-
-  if (status === "pending") {
-    return {
-      allowed: false,
-      reason: "pending_review",
-      title: "Your profile is under review",
-      message:
-        "Our team is checking your documents. Once approved, gym vacancies unlock here — usually within 24 hours.",
-      ...context,
-    };
-  }
 
   if (status === "rejected") {
     return {
@@ -114,7 +106,7 @@ export const getJobAccess = (trainer: any): JobAccess => {
       reason: "not_activated",
       title: "Activate your profile",
       message:
-        "FitWorks charges trainers a one-time ₹99 to activate. Pay once and your profile stays live — browse vacancies, apply to roles and get discovered by hiring gyms, with nothing more to pay later.",
+        "FitWorks charges trainers a one-time ₹99 to activate. Pay once and you can browse every gym vacancy and apply to as many as you like — the gym sees your full profile with each application. No monthly fee, nothing more to pay later.",
       ...context,
     };
   }

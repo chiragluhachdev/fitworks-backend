@@ -4,53 +4,7 @@ import { Job } from "../models/Job";
 import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
-import { getActivationState, activatedTrainerFilter, getJobAccess } from "../utils/subscription";
-
-export const getTrainers = async (req: Request, res: Response) => {
-  try {
-    const { location, experience, specialization, type, limit = 20, page = 1 } = req.query;
-
-    const query: any = {
-      // Discoverable only once verified AND activated.
-      verificationStatus: "verified",
-      ...activatedTrainerFilter(),
-    };
-
-    if (location) {
-      query["personal.city"] = { $regex: location, $options: "i" };
-    }
-    if (experience) {
-      query["professional.yearsOfExperience"] = { $gte: Number(experience) };
-    }
-    if (specialization) {
-      query["professional.specializations"] = { $regex: specialization, $options: "i" };
-    }
-    if (type) {
-      query["workPreferences.employmentType"] = { $in: [type] };
-    }
-
-    const skip = (Number(page) - 1) * Number(limit);
-
-    const trainers = await Trainer.find(query)
-      .skip(skip)
-      .limit(Number(limit))
-      .select("-verificationDocuments -createdAt -updatedAt");
-
-    const total = await Trainer.countDocuments(query);
-
-    res.status(200).json({
-      success: true,
-      count: trainers.length,
-      total,
-      page: Number(page),
-      totalPages: Math.ceil(total / Number(limit)),
-      data: trainers,
-    });
-  } catch (error: any) {
-    console.error("Get Trainers Error:", error);
-    res.status(500).json({ success: false, message: "Server error while fetching trainers" });
-  }
-};
+import { getActivationState, getJobAccess } from "../utils/subscription";
 
 export const getTrainerBySlug = async (req: Request, res: Response) => {
   try {
@@ -60,21 +14,14 @@ export const getTrainerBySlug = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Trainer not found" });
     }
 
-    // Verification documents are government ID / PAN / certificate scans.
-    // Only the trainer themselves and admins may ever see those URLs.
-    const privileged = isOwnerOrAdmin(req.user, trainer._id);
-    const data = trainer.toObject();
-    if (!privileged) {
-      delete (data as any).verificationDocuments;
+    // A trainer profile is private to its owner. Gyms never browse trainers —
+    // they see the ones who applied to their own vacancies, with exactly the
+    // fields that endpoint chooses to populate.
+    if (!isOwnerOrAdmin(req.user, trainer._id)) {
+      return res.status(403).json({ success: false, message: "Not authorized to view this profile" });
     }
 
-    // Phone, email and date of birth are contact-grade PII. Signed-in gyms need
-    // them to reach a trainer; the open internet does not.
-    if (!privileged && !req.user) {
-      delete (data as any).personal?.phone;
-      delete (data as any).personal?.email;
-      delete (data as any).personal?.dateOfBirth;
-    }
+    const data = trainer.toObject();
 
     res.status(200).json({
       success: true,
@@ -195,9 +142,9 @@ export const getTrainerDashboardStats = async (req: Request, res: Response) => {
           activeApplications: applications.length,
           newConnections: connections.filter(c => c.status === "pending").length,
           verificationStatus: trainer.verificationStatus,
-          // The one status that answers "is this profile live?" — approved by an
-          // admin AND paid for. Either one alone is not enough.
-          accountActive: trainer.verificationStatus === "verified" && activation.isActive,
+          // "Is this profile live?" — the one-time ₹99 decides it. Verification
+          // is a badge gyms see, not a condition of access.
+          accountActive: activation.isActive && trainer.verificationStatus !== "rejected",
         },
         applications,
         connections,
