@@ -10,7 +10,11 @@ const router = express.Router();
 // Cloudinary account.
 const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 25,
+  // Signup uploads a certificate and an ID, so a handful of people on one
+  // carrier IP would otherwise exhaust this mid-registration.
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { success: false, message: "Too many uploads. Please try again in a few minutes." },
 });
 

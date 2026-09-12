@@ -26,10 +26,27 @@ connectDB();
 
 // Security Middlewares
 app.use(helmet());
+// A blunt backstop only. The real abuse controls are per-number (OTP) and
+// per-route, so this needs to sit well above what a real person generates.
+//
+// Ad traffic arrives over mobile carriers that put thousands of subscribers
+// behind one CGNAT address, so an entire campaign audience can share a single
+// bucket. The old ceiling of 200 was roughly five visitors per IP per window.
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // Increased limit for dev/testing
-  message: "Too many requests from this IP, please try again after 15 minutes",
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Must be an object. A bare string is sent as text/html, and every client
+  // here parses JSON — a tripped limit then surfaced as "Network error",
+  // telling the user nothing and hiding the cause from us.
+  message: {
+    success: false,
+    code: "RATE_LIMITED",
+    message: "Too many requests from this network. Please try again in a few minutes.",
+  },
+  // Preflights aren't user actions; spending budget on them breaks CORS.
+  skip: (req) => req.method === "OPTIONS",
 });
 app.use("/api", limiter);
 
