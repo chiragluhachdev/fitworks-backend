@@ -1,103 +1,90 @@
-/** Trainer subscription: ₹99 per 30-day cycle. */
-export const SUBSCRIPTION_AMOUNT_PAISE = 9900;
-export const SUBSCRIPTION_DAYS = 30;
-export const SUBSCRIPTION_PLAN = "trainer_monthly_99";
+/** Trainer activation: a single ₹99 payment, no renewal. */
+export const ACTIVATION_AMOUNT_PAISE = 9900;
+export const ACTIVATION_PLAN = "trainer_activation_99";
 
-/** Warn the trainer in-app once they're this close to expiry. */
-export const RENEWAL_WARNING_DAYS = 7;
-
-export interface SubscriptionState {
-  status: "inactive" | "active" | "expiring_soon" | "expired";
+export interface ActivationState {
+  status: "inactive" | "active";
   isActive: boolean;
-  daysRemaining: number;
-  expiresAt: Date | null;
-  startedAt: Date | null;
-  needsRenewal: boolean;
-  cyclesPaid: number;
+  /** When the one-time payment landed. Null until they pay. */
+  activatedAt: Date | null;
+  /** Total rupees received from this trainer. */
+  totalPaid: number;
+  /** Payments on record. More than one only from a legacy monthly renewal. */
+  paymentsMade: number;
 }
 
 /**
- * Derives live subscription status from the stored period end.
+ * When this trainer paid, or null if they never did.
  *
- * Status is always computed, never stored — a stored "active" flag would go
- * stale the moment the period lapsed with no one writing to the record.
+ * Records created before the switch to one-time billing have no activatedAt,
+ * only a monthly period and a payment history. Anyone who ever paid stays
+ * active permanently — a change in our pricing model must not revoke access
+ * somebody already bought.
  */
-export const getSubscriptionState = (sub: any): SubscriptionState => {
-  const end = sub?.currentPeriodEnd ? new Date(sub.currentPeriodEnd) : null;
-  const start = sub?.currentPeriodStart ? new Date(sub.currentPeriodStart) : null;
-  const cyclesPaid = sub?.cyclesPaid || 0;
+const paidAt = (sub: any): Date | null => {
+  if (sub?.activatedAt) return new Date(sub.activatedAt);
+  const first = (sub?.history || [])[0];
+  if (first?.paidAt) return new Date(first.paidAt);
+  if (sub?.currentPeriodStart) return new Date(sub.currentPeriodStart);
+  return null;
+};
 
-  if (!end) {
-    return {
-      status: "inactive",
-      isActive: false,
-      daysRemaining: 0,
-      expiresAt: null,
-      startedAt: null,
-      needsRenewal: true,
-      cyclesPaid,
-    };
-  }
-
-  const msLeft = end.getTime() - Date.now();
-  const daysRemaining = Math.max(0, Math.ceil(msLeft / 86_400_000));
-  const isActive = msLeft > 0;
+/**
+ * Derives activation status from the payment record.
+ *
+ * There is no expiry to compute any more: paid is paid, permanently.
+ */
+export const getActivationState = (sub: any): ActivationState => {
+  const at = paidAt(sub);
+  const history = sub?.history || [];
 
   return {
-    status: !isActive ? "expired" : daysRemaining <= RENEWAL_WARNING_DAYS ? "expiring_soon" : "active",
-    isActive,
-    daysRemaining,
-    expiresAt: end,
-    startedAt: start,
-    needsRenewal: !isActive || daysRemaining <= RENEWAL_WARNING_DAYS,
-    cyclesPaid,
+    status: at ? "active" : "inactive",
+    isActive: Boolean(at),
+    activatedAt: at,
+    totalPaid: history.reduce((sum: number, h: any) => sum + (h.amount || 0), 0),
+    paymentsMade: history.length || sub?.cyclesPaid || 0,
   };
 };
 
 /**
- * Next period bounds. Renewing early stacks onto the remaining time rather than
- * discarding it, so a trainer is never punished for paying ahead.
+ * Mongo filter fragment for "this trainer has paid".
+ *
+ * A missing field compares equal to null in Mongo, so $ne: null correctly
+ * excludes trainers who never paid. The history clause catches records from
+ * the monthly era that predate activatedAt.
  */
-export const nextPeriod = (currentEnd?: Date | null) => {
-  const now = new Date();
-  const base = currentEnd && new Date(currentEnd) > now ? new Date(currentEnd) : now;
-  const end = new Date(base);
-  end.setDate(end.getDate() + SUBSCRIPTION_DAYS);
-  return { periodStart: now, periodEnd: end };
-};
-
-/** Mongo filter fragment for "subscription currently active". */
-export const activeSubscriptionFilter = () => ({
-  "subscription.currentPeriodEnd": { $gt: new Date() },
+export const activatedTrainerFilter = () => ({
+  $or: [
+    { "subscription.activatedAt": { $ne: null } },
+    { "subscription.history.0": { $exists: true } },
+  ],
 });
 
-export type AccessBlockReason = "pending_review" | "rejected" | "subscription_inactive" | null;
+export type AccessBlockReason = "pending_review" | "rejected" | "not_activated" | null;
 
 export interface JobAccess {
   allowed: boolean;
   reason: AccessBlockReason;
   title: string;
   message: string;
-  /** Lets the review screen offer activation while the trainer waits. */
-  membershipActive: boolean;
-  /** Renewal rather than first activation — changes the wording. */
-  hasLapsed: boolean;
+  /** Whether the one-time payment is already on record. */
+  isActivated: boolean;
 }
 
 /**
  * Whether a trainer may browse and apply to gym vacancies.
  *
- * Two independent gates: the profile must be approved, and the membership must
- * be paid. Verification is checked first because it's the more fundamental
+ * Two independent gates: the profile must be approved, and the ₹99 must be
+ * paid. Verification is checked first because it's the more fundamental
  * blocker — no amount of paying fixes a rejected profile.
  */
 export const getJobAccess = (trainer: any): JobAccess => {
   const status = trainer?.verificationStatus;
-  const state = getSubscriptionState(trainer?.subscription);
-  // Carried on every branch so the client can tailor the screen: offer
-  // activation while a review is still pending, and say "renew" rather than
-  // "activate" to someone who has paid before.
-  const context = { membershipActive: state.isActive, hasLapsed: state.cyclesPaid > 0 };
+  const state = getActivationState(trainer?.subscription);
+  // Carried on every branch so the review screen can offer activation while the
+  // trainer waits, rather than making them come back for a second step.
+  const context = { isActivated: state.isActive };
 
   if (status === "pending") {
     return {
@@ -124,10 +111,10 @@ export const getJobAccess = (trainer: any): JobAccess => {
   if (!state.isActive) {
     return {
       allowed: false,
-      reason: "subscription_inactive",
-      title: "Activate your membership",
+      reason: "not_activated",
+      title: "Activate your profile",
       message:
-        "FitWorks is a paid platform for trainers. Activate your ₹99/month membership to browse vacancies, apply to roles and be discovered by hiring gyms.",
+        "FitWorks charges trainers a one-time ₹99 to activate. Pay once and your profile stays live — browse vacancies, apply to roles and get discovered by hiring gyms, with nothing more to pay later.",
       ...context,
     };
   }

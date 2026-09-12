@@ -5,7 +5,7 @@ import { Trainer } from "../models/Trainer";
 import { Job } from "../models/Job";
 import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
-import { getSubscriptionState } from "../utils/subscription";
+import { getActivationState, activatedTrainerFilter, ACTIVATION_AMOUNT_PAISE } from "../utils/subscription";
 
 export const getDashboardStats = async (req: Request, res: Response) => {
   try {
@@ -18,9 +18,7 @@ export const getDashboardStats = async (req: Request, res: Response) => {
     const totalApplications = await Application.countDocuments();
     const hiredTrainers = await Application.countDocuments({ status: "hired" });
     const pendingConnections = await Connection.countDocuments({ status: "pending" });
-    const activeMembers = await Trainer.countDocuments({
-      "subscription.currentPeriodEnd": { $gt: new Date() },
-    });
+    const activeMembers = await Trainer.countDocuments(activatedTrainerFilter());
     const lapsedMembers = totalTrainers - activeMembers;
 
     res.status(200).json({
@@ -61,13 +59,12 @@ export const getTrainers = async (req: Request, res: Response) => {
     // combined answer to "is this trainer actually live on the platform?" —
     // approved by an admin AND currently paid up.
     const data = trainers.map((t) => {
-      const subscriptionState = getSubscriptionState(t.subscription);
+      const activation = getActivationState(t.subscription);
       return {
         ...t.toObject(),
-        subscriptionState,
-        accountActive: t.verificationStatus === "verified" && subscriptionState.isActive,
-        hasEverPaid: (t.subscription?.cyclesPaid || 0) > 0,
-        totalPaid: (t.subscription?.history || []).reduce((sum, h) => sum + (h.amount || 0), 0),
+        activation,
+        accountActive: t.verificationStatus === "verified" && activation.isActive,
+        totalPaid: activation.totalPaid,
       };
     });
     res.status(200).json({ success: true, data });
@@ -242,7 +239,7 @@ export const getTrainerDetail = async (req: Request, res: Response) => {
       .populate("gymId", "gymName slug")
       .sort({ createdAt: -1 });
 
-    const subscription = getSubscriptionState(trainer.subscription);
+    const activation = getActivationState(trainer.subscription);
     const history = [...(trainer.subscription?.history || [])].sort(
       (a, b) => new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime()
     );
@@ -252,7 +249,7 @@ export const getTrainerDetail = async (req: Request, res: Response) => {
       data: {
         trainer,
         account,
-        subscription,
+        activation,
         billingHistory: history,
         applications,
         connections,
@@ -272,10 +269,10 @@ export const getTrainerDetail = async (req: Request, res: Response) => {
 /** Membership ledger across all trainers, with revenue totals. */
 export const getSubscriptions = async (req: Request, res: Response) => {
   try {
-    const trainers = await Trainer.find().sort({ "subscription.currentPeriodEnd": -1 });
+    const trainers = await Trainer.find().sort({ "subscription.activatedAt": -1, createdAt: -1 });
 
     const rows = trainers.map((t) => {
-      const state = getSubscriptionState(t.subscription);
+      const activation = getActivationState(t.subscription);
       const history = t.subscription?.history || [];
       return {
         _id: t._id,
@@ -284,23 +281,21 @@ export const getSubscriptions = async (req: Request, res: Response) => {
         phone: t.personal?.phone,
         city: t.personal?.city,
         verificationStatus: t.verificationStatus,
-        subscription: state,
-        cyclesPaid: t.subscription?.cyclesPaid || 0,
-        amountPerCycle: t.subscription?.amountPerCycle ?? 99,
+        activation,
         lastPaidAt: history.length ? history[history.length - 1].paidAt : null,
-        totalPaid: history.reduce((sum, h) => sum + (h.amount || 0), 0),
+        totalPaid: activation.totalPaid,
       };
     });
 
     const summary = {
       total: rows.length,
-      active: rows.filter((r) => r.subscription.status === "active").length,
-      expiringSoon: rows.filter((r) => r.subscription.status === "expiring_soon").length,
-      expired: rows.filter((r) => r.subscription.status === "expired").length,
-      neverPaid: rows.filter((r) => r.subscription.status === "inactive").length,
-      // Recorded as billed, never recomputed from current pricing.
+      active: rows.filter((r) => r.activation.isActive).length,
+      neverPaid: rows.filter((r) => !r.activation.isActive).length,
+      // Recorded as charged, never recomputed from current pricing.
       lifetimeRevenue: rows.reduce((sum, r) => sum + r.totalPaid, 0),
-      monthlyRecurring: rows.filter((r) => r.subscription.isActive).reduce((s, r) => s + r.amountPerCycle, 0),
+      // What the remaining unactivated trainers are worth if they all pay.
+      pipelineValue:
+        rows.filter((r) => !r.activation.isActive).length * (ACTIVATION_AMOUNT_PAISE / 100),
     };
 
     res.status(200).json({ success: true, summary, data: rows });

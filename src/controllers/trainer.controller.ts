@@ -4,16 +4,16 @@ import { Job } from "../models/Job";
 import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
-import { getSubscriptionState, activeSubscriptionFilter, getJobAccess } from "../utils/subscription";
+import { getActivationState, activatedTrainerFilter, getJobAccess } from "../utils/subscription";
 
 export const getTrainers = async (req: Request, res: Response) => {
   try {
     const { location, experience, specialization, type, limit = 20, page = 1 } = req.query;
 
     const query: any = {
-      // Discoverable only while verified AND on an active membership.
+      // Discoverable only once verified AND activated.
       verificationStatus: "verified",
-      ...activeSubscriptionFilter(),
+      ...activatedTrainerFilter(),
     };
 
     if (location) {
@@ -79,9 +79,8 @@ export const getTrainerBySlug = async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       data,
-      // Derived, never stored: a trainer counts as live only while approved AND
-      // on a paid membership.
-      subscription: getSubscriptionState(trainer.subscription),
+      // Derived, never stored: a trainer is live only once approved AND activated.
+      activation: getActivationState(trainer.subscription),
     });
   } catch (error: any) {
     console.error("Get Trainer Error:", error);
@@ -184,13 +183,13 @@ export const getTrainerDashboardStats = async (req: Request, res: Response) => {
           .populate("gymId", "gymName gymLogo address slug")
       : [];
 
-    const subscription = getSubscriptionState(trainer.subscription);
+    const activation = getActivationState(trainer.subscription);
 
     res.status(200).json({
       success: true,
       data: {
         trainer,
-        subscription,
+        activation,
         jobAccess,
         stats: {
           activeApplications: applications.length,
@@ -198,7 +197,7 @@ export const getTrainerDashboardStats = async (req: Request, res: Response) => {
           verificationStatus: trainer.verificationStatus,
           // The one status that answers "is this profile live?" — approved by an
           // admin AND paid for. Either one alone is not enough.
-          accountActive: trainer.verificationStatus === "verified" && subscription.isActive,
+          accountActive: trainer.verificationStatus === "verified" && activation.isActive,
         },
         applications,
         connections,

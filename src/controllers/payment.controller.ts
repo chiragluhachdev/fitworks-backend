@@ -4,21 +4,22 @@ import { Trainer } from "../models/Trainer";
 import { getRazorpay, keyId, keySecret, webhookSecret } from "../config/razorpay";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 import {
-  SUBSCRIPTION_AMOUNT_PAISE,
-  SUBSCRIPTION_PLAN,
-  SUBSCRIPTION_DAYS,
-  getSubscriptionState,
-  nextPeriod,
+  ACTIVATION_AMOUNT_PAISE,
+  ACTIVATION_PLAN,
+  getActivationState,
 } from "../utils/subscription";
 
 /**
- * Extends a trainer's subscription by one cycle and appends to billing history.
- * Only ever called once a payment signature has been verified.
+ * Activates a trainer permanently and records the payment.
  *
- * Idempotent: a payment id already present in history is ignored, so a webhook
- * retry (or a webhook racing the browser callback) can't grant two cycles.
+ * Only ever called once a payment signature has been verified. There is no
+ * period to extend — one ₹99 payment activates the profile for good.
+ *
+ * Idempotent twice over: a payment id already in history is ignored, and
+ * activatedAt is only ever written once. So a webhook retry, or a webhook
+ * racing the browser callback, cannot double-charge or reset the date.
  */
-const applyPaidCycle = async (
+const applyActivation = async (
   filter: Record<string, unknown>,
   { orderId, paymentId, amountPaise }: { orderId: string; paymentId: string; amountPaise: number }
 ) => {
@@ -31,21 +32,23 @@ const applyPaidCycle = async (
     return trainer;
   }
 
-  const { periodStart, periodEnd } = nextPeriod(trainer.subscription?.currentPeriodEnd);
+  const paidOn = new Date();
   const amount = amountPaise / 100;
 
-  trainer.subscription.plan = SUBSCRIPTION_PLAN;
-  trainer.subscription.amountPerCycle = SUBSCRIPTION_AMOUNT_PAISE / 100;
-  trainer.subscription.currentPeriodStart = trainer.subscription.currentPeriodStart || periodStart;
-  trainer.subscription.currentPeriodEnd = periodEnd;
+  trainer.subscription.plan = ACTIVATION_PLAN;
+  trainer.subscription.amountPaid = ACTIVATION_AMOUNT_PAISE / 100;
+  // Written once. A second payment (a legacy renewal, or a duplicate we chose
+  // to honour) must not move the original activation date.
+  if (!trainer.subscription.activatedAt) {
+    trainer.subscription.activatedAt = paidOn;
+  }
   trainer.subscription.lastOrderId = orderId;
   trainer.subscription.lastPaymentId = paymentId;
   trainer.subscription.pendingOrderId = undefined;
-  trainer.subscription.cyclesPaid = (trainer.subscription.cyclesPaid || 0) + 1;
-  trainer.subscription.history.push({ orderId, paymentId, amount, paidAt: new Date(), periodStart, periodEnd });
+  trainer.subscription.history.push({ orderId, paymentId, amount, paidAt: paidOn });
 
   await trainer.save();
-  console.log(`Subscription extended for ${trainer.slug} until ${periodEnd.toISOString()}`);
+  console.log(`Trainer ${trainer.slug} activated (one-time ₹${amount}).`);
   return trainer;
 };
 
@@ -70,18 +73,26 @@ export const createTrainerPaymentOrder = async (req: Request, res: Response): Pr
       return res.status(403).json({ success: false, message: "Not authorized to pay for this profile" });
     }
 
-    const state = getSubscriptionState(trainer.subscription);
-    const isRenewal = state.cyclesPaid > 0;
+    // Never take a second payment for a one-time activation.
+    const state = getActivationState(trainer.subscription);
+    if (state.isActive) {
+      return res.status(400).json({
+        success: false,
+        code: "ALREADY_ACTIVATED",
+        message: "This profile is already activated — there's nothing more to pay.",
+        activation: state,
+      });
+    }
 
     const order = await getRazorpay().orders.create({
-      amount: SUBSCRIPTION_AMOUNT_PAISE,
+      amount: ACTIVATION_AMOUNT_PAISE,
       currency: "INR",
       receipt: `fw_${Date.now().toString(36)}_${trainer._id.toString().slice(-8)}`.slice(0, 40),
       notes: {
         trainerId: trainer._id.toString(),
         trainerSlug: trainer.slug,
-        plan: SUBSCRIPTION_PLAN,
-        purpose: isRenewal ? "FitWorks trainer renewal" : "FitWorks trainer activation",
+        plan: ACTIVATION_PLAN,
+        purpose: "FitWorks trainer activation (one-time)",
       },
     });
 
@@ -92,10 +103,9 @@ export const createTrainerPaymentOrder = async (req: Request, res: Response): Pr
       success: true,
       orderId: order.id,
       keyId: keyId(),
-      amount: SUBSCRIPTION_AMOUNT_PAISE,
+      amount: ACTIVATION_AMOUNT_PAISE,
       currency: "INR",
-      isRenewal,
-      cycleDays: SUBSCRIPTION_DAYS,
+      oneTime: true,
       trainerName: trainer.personal?.fullName,
       trainerPhone: trainer.personal?.phone,
       trainerEmail: trainer.personal?.email,
@@ -149,14 +159,14 @@ export const verifyTrainerPayment = async (req: Request, res: Response): Promise
     }
 
     const order: any = await getRazorpay().orders.fetch(razorpay_order_id);
-    if (order.status !== "paid" || Number(order.amount_paid) < SUBSCRIPTION_AMOUNT_PAISE) {
+    if (order.status !== "paid" || Number(order.amount_paid) < ACTIVATION_AMOUNT_PAISE) {
       return res.status(400).json({
         success: false,
         message: `Payment not complete (status: ${order.status})`,
       });
     }
 
-    const updated = await applyPaidCycle(
+    const updated = await applyActivation(
       { slug: trainerSlug },
       { orderId: razorpay_order_id, paymentId: razorpay_payment_id, amountPaise: Number(order.amount_paid) }
     );
@@ -164,8 +174,8 @@ export const verifyTrainerPayment = async (req: Request, res: Response): Promise
     return res.status(200).json({
       success: true,
       isPaid: true,
-      subscription: getSubscriptionState(updated?.subscription),
-      message: "Payment verified — your membership is active.",
+      activation: getActivationState(updated?.subscription),
+      message: "Payment verified — your profile is now active for good.",
     });
   } catch (error: any) {
     console.error("Razorpay Verify Error:", error);
@@ -201,12 +211,12 @@ export const razorpayWebhook = async (req: Request, res: Response): Promise<any>
     const payment = req.body?.payload?.payment?.entity;
 
     if (event === "payment.captured" && payment) {
-      if (Number(payment.amount) >= SUBSCRIPTION_AMOUNT_PAISE) {
+      if (Number(payment.amount) >= ACTIVATION_AMOUNT_PAISE) {
         const trainerId = payment.notes?.trainerId;
         const filter = trainerId
           ? { _id: trainerId }
           : { "subscription.pendingOrderId": payment.order_id };
-        const updated = await applyPaidCycle(filter, {
+        const updated = await applyActivation(filter, {
           orderId: payment.order_id,
           paymentId: payment.id,
           amountPaise: Number(payment.amount),
@@ -244,9 +254,9 @@ export const getTrainerPaymentStatus = async (req: Request, res: Response): Prom
     }
     return res.status(200).json({
       success: true,
-      subscription: getSubscriptionState(trainer.subscription),
-      amountPerCycle: SUBSCRIPTION_AMOUNT_PAISE / 100,
-      cycleDays: SUBSCRIPTION_DAYS,
+      activation: getActivationState(trainer.subscription),
+      amount: ACTIVATION_AMOUNT_PAISE / 100,
+      oneTime: true,
     });
   } catch (error: any) {
     console.error("Get Subscription Status Error:", error);

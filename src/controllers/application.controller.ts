@@ -23,8 +23,7 @@ export const applyForJob = async (req: Request, res: Response) => {
         reason: access.reason,
         title: access.title,
         message: access.message,
-        membershipActive: access.membershipActive,
-        hasLapsed: access.hasLapsed,
+        isActivated: access.isActivated,
       });
     }
 

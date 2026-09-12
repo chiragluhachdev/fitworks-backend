@@ -33,22 +33,25 @@ export interface ITrainer extends Document {
   verificationDocuments: string[]; // URLs to documents
   subscription: {
     plan: string;
-    /** Rupees billed per cycle, recorded as charged rather than recomputed. */
-    amountPerCycle: number;
+    /** Rupees actually charged, recorded rather than recomputed. */
+    amountPaid: number;
+    /** Set once, on the one-time payment. Presence means active, permanently. */
+    activatedAt?: Date;
+    /** @deprecated Monthly-era fields, kept so historical records stay readable. */
     currentPeriodStart?: Date;
     currentPeriodEnd?: Date;
+    cyclesPaid?: number;
     lastOrderId?: string;
     lastPaymentId?: string;
     pendingOrderId?: string;
-    cyclesPaid: number;
-    /** Immutable billing history. */
+    /** Immutable payment history. */
     history: {
       orderId: string;
       paymentId: string;
       amount: number;
       paidAt: Date;
-      periodStart: Date;
-      periodEnd: Date;
+      periodStart?: Date;
+      periodEnd?: Date;
     }[];
   };
   slug: string;
@@ -100,28 +103,32 @@ const trainerSchema = new Schema<ITrainer>(
       type: String,
       enum: ["pending", "verified", "rejected"],
       // Verification is the first of two gates and is never granted on signup —
-      // an admin approves the documents. Paying the ₹99 is the second gate.
+      // an admin approves the documents. The one-time ₹99 is the second gate.
       // A profile only goes live to gyms once both are satisfied.
       default: "pending",
     },
     verificationDocuments: [{ type: String }],
     subscription: {
-      plan: { type: String, default: "trainer_monthly_99" },
-      amountPerCycle: { type: Number, default: 99 },
+      plan: { type: String, default: "trainer_activation_99" },
+      amountPaid: { type: Number, default: 99 },
+      // The one field that decides access. Never cleared, never expires.
+      activatedAt: { type: Date },
+      // Monthly-era fields. Retained so existing records remain intact and
+      // auditable; nothing reads them for access any more.
       currentPeriodStart: { type: Date },
       currentPeriodEnd: { type: Date },
+      cyclesPaid: { type: Number, default: 0 },
       lastOrderId: { type: String },
       lastPaymentId: { type: String },
       pendingOrderId: { type: String },
-      cyclesPaid: { type: Number, default: 0 },
       history: [
         {
           orderId: { type: String, required: true },
           paymentId: { type: String, required: true },
           amount: { type: Number, required: true },
           paidAt: { type: Date, required: true },
-          periodStart: { type: Date, required: true },
-          periodEnd: { type: Date, required: true },
+          periodStart: { type: Date },
+          periodEnd: { type: Date },
         },
       ],
     },
@@ -135,6 +142,6 @@ const trainerSchema = new Schema<ITrainer>(
 );
 
 // Gym-facing search filters on this constantly.
-trainerSchema.index({ "subscription.currentPeriodEnd": 1 });
+trainerSchema.index({ "subscription.activatedAt": 1 });
 
 export const Trainer = mongoose.model<ITrainer>("Trainer", trainerSchema);
