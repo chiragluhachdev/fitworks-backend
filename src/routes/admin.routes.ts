@@ -14,6 +14,12 @@ import {
   getSubscriptions,
   deleteTrainer,
 } from "../controllers/admin.controller";
+import {
+  getInstantLeads,
+  importInstantLeads,
+  updateInstantLead,
+  deleteInstantLead,
+} from "../controllers/instantLead.controller";
 import { protect, authorize } from "../middleware/auth.middleware";
 
 const router = express.Router();
@@ -44,5 +50,11 @@ router.put("/trainers/:id/verify", updateTrainerVerification);
 
 // Removes the profile, its login and every application/invitation attached.
 router.delete("/trainers/:id", deleteTrainer);
+
+// Meta instant-form leads. Self-contained: nothing else reads this collection.
+router.get("/instant-leads", getInstantLeads);
+router.post("/instant-leads/import", importInstantLeads);
+router.patch("/instant-leads/:id", updateInstantLead);
+router.delete("/instant-leads/:id", deleteInstantLead);
 
 export default router;
