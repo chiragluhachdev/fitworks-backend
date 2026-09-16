@@ -142,9 +142,8 @@ export const getTrainerDashboardStats = async (req: Request, res: Response) => {
           activeApplications: applications.length,
           newConnections: connections.filter(c => c.status === "pending").length,
           verificationStatus: trainer.verificationStatus,
-          // "Is this profile live?" — the one-time ₹99 decides it. Verification
-          // is a badge gyms see, not a condition of access.
-          accountActive: activation.isActive && trainer.verificationStatus !== "rejected",
+          // Free for trainers, so a profile is live unless it was rejected.
+          accountActive: trainer.verificationStatus !== "rejected",
         },
         applications,
         connections,

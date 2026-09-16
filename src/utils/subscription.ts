@@ -1,4 +1,10 @@
-/** Trainer activation: a single ₹99 payment, no renewal. */
+/**
+ * FitWorks is free for trainers. Nothing here gates access any more.
+ *
+ * The payment code and these constants are kept because a group of trainers
+ * did pay ₹99 under the old model and that history has to stay readable — and
+ * so charging can be switched back on without rebuilding it.
+ */
 export const ACTIVATION_AMOUNT_PAISE = 9900;
 export const ACTIVATION_PLAN = "trainer_activation_99";
 
@@ -61,55 +67,33 @@ export const activatedTrainerFilter = () => ({
   ],
 });
 
-export type AccessBlockReason = "pending_review" | "rejected" | "not_activated" | null;
+export type AccessBlockReason = "rejected" | null;
 
 export interface JobAccess {
   allowed: boolean;
   reason: AccessBlockReason;
   title: string;
   message: string;
-  /** Whether the one-time payment is already on record. */
-  isActivated: boolean;
 }
 
 /**
  * Whether a trainer may browse and apply to gym vacancies.
  *
- * Paying the one-time ₹99 is the gate. Awaiting verification does not hold a
- * trainer back: an unreviewed profile is the default state of every signup, and
- * making paying customers wait on our review queue costs them the thing they
- * just bought. Verification is a trust badge gyms see on an application, not a
- * turnstile.
- *
- * An explicit rejection still blocks, because that is a deliberate decision
- * about a specific profile rather than a queue we haven't got to yet.
+ * Everyone may, free of charge. Only an explicit rejection blocks, because that
+ * is a deliberate decision about a specific profile — a trainer merely waiting
+ * on our review queue is not held back, since that is the default state of
+ * every signup. Verification is a badge gyms see on an application.
  */
 export const getJobAccess = (trainer: any): JobAccess => {
-  const status = trainer?.verificationStatus;
-  const state = getActivationState(trainer?.subscription);
-  const context = { isActivated: state.isActive };
-
-  if (status === "rejected") {
+  if (trainer?.verificationStatus === "rejected") {
     return {
       allowed: false,
       reason: "rejected",
       title: "Your profile needs attention",
       message:
         "We couldn't verify the documents you submitted. Re-upload a valid certificate and a clear government ID to get approved.",
-      ...context,
     };
   }
 
-  if (!state.isActive) {
-    return {
-      allowed: false,
-      reason: "not_activated",
-      title: "Activate your profile",
-      message:
-        "FitWorks charges trainers a one-time ₹99 to activate. Pay once and you can browse every gym vacancy and apply to as many as you like — the gym sees your full profile with each application. No monthly fee, nothing more to pay later.",
-      ...context,
-    };
-  }
-
-  return { allowed: true, reason: null, title: "", message: "", ...context };
+  return { allowed: true, reason: null, title: "", message: "" };
 };

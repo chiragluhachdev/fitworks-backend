@@ -63,7 +63,7 @@ export const getTrainers = async (req: Request, res: Response) => {
       return {
         ...t.toObject(),
         activation,
-        accountActive: activation.isActive && t.verificationStatus !== "rejected",
+        accountActive: t.verificationStatus !== "rejected",
         totalPaid: activation.totalPaid,
       };
     });
