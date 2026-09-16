@@ -142,8 +142,8 @@ export const getTrainerDashboardStats = async (req: Request, res: Response) => {
           activeApplications: applications.length,
           newConnections: connections.filter(c => c.status === "pending").length,
           verificationStatus: trainer.verificationStatus,
-          // Free for trainers, so a profile is live unless it was rejected.
-          accountActive: trainer.verificationStatus !== "rejected",
+          // Verification is the gate: approved means active, nothing else does.
+          accountActive: trainer.verificationStatus === "verified",
         },
         applications,
         connections,

@@ -67,7 +67,7 @@ export const activatedTrainerFilter = () => ({
   ],
 });
 
-export type AccessBlockReason = "rejected" | null;
+export type AccessBlockReason = "pending_review" | "rejected" | null;
 
 export interface JobAccess {
   allowed: boolean;
@@ -79,13 +79,24 @@ export interface JobAccess {
 /**
  * Whether a trainer may browse and apply to gym vacancies.
  *
- * Everyone may, free of charge. Only an explicit rejection blocks, because that
- * is a deliberate decision about a specific profile — a trainer merely waiting
- * on our review queue is not held back, since that is the default state of
- * every signup. Verification is a badge gyms see on an application.
+ * Verification is the gate, and it is free: an approved profile is active, and
+ * everything before approval is not. Gyms only ever receive applications from
+ * trainers whose documents we have actually checked.
  */
 export const getJobAccess = (trainer: any): JobAccess => {
-  if (trainer?.verificationStatus === "rejected") {
+  const status = trainer?.verificationStatus;
+
+  if (status === "pending") {
+    return {
+      allowed: false,
+      reason: "pending_review",
+      title: "Your profile is under review",
+      message:
+        "Our team is checking the documents you uploaded. Once approved, your profile goes active and every gym vacancy unlocks here — usually within 24 hours.",
+    };
+  }
+
+  if (status === "rejected") {
     return {
       allowed: false,
       reason: "rejected",
