@@ -52,6 +52,23 @@ function parseDelimited(text: string): string[][] {
   return rows.filter((r) => r.some((v) => v.trim() !== ""));
 }
 
+/**
+ * Meta's Leads Center exports UTF-16LE with a byte-order mark and tab
+ * separators — reading that as UTF-8 yields a null byte between every
+ * character. Decode by BOM, falling back to UTF-8.
+ */
+function readText(path: string): string {
+  const buf = fs.readFileSync(path);
+  if (buf[0] === 0xff && buf[1] === 0xfe) return buf.subarray(2).toString("utf16le");
+  if (buf[0] === 0xfe && buf[1] === 0xff) {
+    const swapped = Buffer.from(buf.subarray(2));
+    swapped.swap16();
+    return swapped.toString("utf16le");
+  }
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return buf.subarray(3).toString("utf8");
+  return buf.toString("utf8");
+}
+
 const norm = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** Finds the first header matching any of these fragments. */
@@ -73,7 +90,7 @@ async function main() {
     process.exit(1);
   }
 
-  const rows = parseDelimited(fs.readFileSync(file, "utf8"));
+  const rows = parseDelimited(readText(file));
   const headers = rows[0];
   const body = rows.slice(1);
 
