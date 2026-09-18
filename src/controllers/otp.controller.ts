@@ -173,7 +173,7 @@ export const verifyOtp = async (req: Request, res: Response): Promise<any> => {
           `https://cpaas.messagecentral.com/verification/v3/validateOtp?countryCode=91&mobileNumber=${phone}&verificationId=${token.messageCentralVerificationId}&code=${code}`,
           { headers: { authToken: tokenVal || "" } }
         );
-        const data = await res.json();
+        const data: any = await res.json().catch(() => ({}));
         if (res.ok && data?.responseCode === 200) {
           matches = true;
         }
