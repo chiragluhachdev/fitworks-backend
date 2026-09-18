@@ -13,6 +13,8 @@ import {
   getTrainerDetail,
   getSubscriptions,
   deleteTrainer,
+  getSettings,
+  updateSettings,
 } from "../controllers/admin.controller";
 import {
   getInstantLeads,
@@ -56,5 +58,9 @@ router.get("/instant-leads", getInstantLeads);
 router.post("/instant-leads/import", importInstantLeads);
 router.patch("/instant-leads/:id", updateInstantLead);
 router.delete("/instant-leads/:id", deleteInstantLead);
+
+// Settings
+router.get("/settings", getSettings);
+router.put("/settings", updateSettings);
 
 export default router;

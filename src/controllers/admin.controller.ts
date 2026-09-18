@@ -5,6 +5,7 @@ import { Trainer } from "../models/Trainer";
 import { Job } from "../models/Job";
 import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
+import { SystemSetting } from "../models/SystemSetting";
 import { getActivationState, activatedTrainerFilter, ACTIVATION_AMOUNT_PAISE } from "../utils/subscription";
 
 export const getDashboardStats = async (req: Request, res: Response) => {
@@ -301,6 +302,38 @@ export const getSubscriptions = async (req: Request, res: Response) => {
     res.status(200).json({ success: true, summary, data: rows });
   } catch (error: any) {
     console.error("Admin Subscriptions Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const getSettings = async (req: Request, res: Response) => {
+  try {
+    let settings = await SystemSetting.findOne();
+    if (!settings) {
+      settings = await SystemSetting.create({});
+    }
+    res.status(200).json({ success: true, data: settings });
+  } catch (error: any) {
+    console.error("Admin Get Settings Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const updateSettings = async (req: Request, res: Response) => {
+  try {
+    let settings = await SystemSetting.findOne();
+    if (!settings) {
+      settings = new SystemSetting();
+    }
+    
+    if (req.body.otpEnabled !== undefined) {
+      settings.otpEnabled = req.body.otpEnabled;
+    }
+    
+    await settings.save();
+    res.status(200).json({ success: true, data: settings });
+  } catch (error: any) {
+    console.error("Admin Update Settings Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };

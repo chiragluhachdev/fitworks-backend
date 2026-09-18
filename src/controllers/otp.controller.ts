@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import crypto from "crypto";
 import { OtpToken } from "../models/OtpToken";
 import { User } from "../models/User";
+import { SystemSetting } from "../models/SystemSetting";
 import { normalizePhone, isValidPhone } from "../utils/phone";
 import {
   sendSms,
@@ -39,6 +40,29 @@ export const sendOtp = async (req: Request, res: Response): Promise<any> => {
         success: false,
         message: "No account found for this mobile number.",
       });
+    }
+
+    // Check if OTP is globally enabled
+    let settings = await SystemSetting.findOne();
+    if (!settings) {
+      settings = await SystemSetting.create({});
+    }
+
+    if (!settings.otpEnabled) {
+      if (purpose === "login") {
+        return res.status(400).json({
+          success: false,
+          message: "Login using OTP isn't available now, will be available after 12hrs, please try again later."
+        });
+      } else {
+        // For registration, bypass OTP entirely by providing a bypass token
+        return res.status(200).json({
+          success: true,
+          message: "OTP Verification bypassed",
+          verificationToken: "BYPASS_OTP_TOKEN",
+          bypassed: true
+        });
+      }
     }
 
     const now = new Date();
@@ -184,6 +208,14 @@ export const consumePhoneVerification = async (
   purpose: "registration" | "login"
 ): Promise<boolean> => {
   if (!verificationToken) return false;
+  
+  if (verificationToken === "BYPASS_OTP_TOKEN") {
+    let settings = await SystemSetting.findOne();
+    if (settings && !settings.otpEnabled) {
+      return true; // Bypass successful
+    }
+  }
+
   const token = await OtpToken.findOne({ phone, purpose, verificationToken, verified: true });
   if (!token || token.expiresAt < new Date()) return false;
   await token.deleteOne();
