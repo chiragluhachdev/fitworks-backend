@@ -54,7 +54,7 @@ export const sendSms = async (phone: string, message: string): Promise<SmsResult
 
 /* ───────────────────────────── OTP helpers ───────────────────────────── */
 
-export const OTP_LENGTH = 6;
+export const OTP_LENGTH = 4;
 export const OTP_TTL_MINUTES = 10;
 export const OTP_MAX_ATTEMPTS = 5;
 export const OTP_RESEND_COOLDOWN_SECONDS = 60;
