@@ -1,10 +1,10 @@
 import crypto from "crypto";
 
-const FAST2SMS_URL = "https://www.fast2sms.com/dev/bulkV2";
+const MESSAGE_CENTRAL_URL = "https://cpaas.messagecentral.com/verification/v3/send";
 
 // Read at call time, not module load: ES imports are evaluated before
 // dotenv.config() runs in index.ts, so a top-level read is always empty.
-const apiKey = () => process.env.FAST2SMS_API_KEY || "";
+const apiKey = () => process.env.MESSAGE_CENTRAL_AUTH_TOKEN || "";
 
 export const smsConfigured = () => Boolean(apiKey());
 
@@ -15,43 +15,37 @@ export interface SmsResult {
 }
 
 /**
- * Sends one transactional SMS through Fast2SMS.
- *
- * Uses `route=q` (Quick SMS), the only route this account can currently use —
- * `route=otp` needs website verification and `route=v3` needs an approved DLT
- * sender ID. Once either is completed, set FAST2SMS_ROUTE=otp and the dedicated
- * OTP route (cheaper, branded) takes over with no other change.
+ * Sends one transactional SMS through Message Central.
  */
 export const sendSms = async (phone: string, message: string): Promise<SmsResult> => {
-  const FAST2SMS_KEY = apiKey();
-  if (!FAST2SMS_KEY) {
-    console.warn(`[sms] FAST2SMS_API_KEY not set — would have sent to ${phone}: ${message}`);
+  const token = apiKey();
+  if (!token) {
+    console.warn(`[sms] MESSAGE_CENTRAL_AUTH_TOKEN not set — would have sent to ${phone}: ${message}`);
     return { ok: false, error: "SMS not configured" };
   }
 
-  const route = process.env.FAST2SMS_ROUTE || "q";
-  const url = new URL(FAST2SMS_URL);
-  url.searchParams.set("numbers", phone);
-
-  if (route === "otp") {
-    // The dedicated OTP route takes only the digits and renders its own copy.
-    const code = message.match(/\d{4,8}/)?.[0] || "";
-    url.searchParams.set("route", "otp");
-    url.searchParams.set("variables_values", code);
-  } else {
-    url.searchParams.set("route", route);
-    url.searchParams.set("message", message);
-    url.searchParams.set("flash", "0");
-  }
+  // Use the MessageNow API endpoint by passing flowType=SMS and message
+  const url = new URL(MESSAGE_CENTRAL_URL);
+  url.searchParams.set("countryCode", "91");
+  url.searchParams.set("flowType", "SMS");
+  url.searchParams.set("mobileNumber", phone);
+  url.searchParams.set("message", message);
 
   try {
-    const res = await fetch(url, { headers: { authorization: FAST2SMS_KEY } });
+    const res = await fetch(url, { 
+      method: "POST",
+      headers: { authToken: token } 
+    });
+    
     const data: any = await res.json().catch(() => ({}));
-    if (data?.return === true) {
-      return { ok: true, requestId: data.request_id };
+    
+    // Message Central success response typically has responseCode 200
+    if (res.ok && data?.responseCode === 200) {
+      return { ok: true, requestId: data?.data?.verificationId || data?.data?.transactionId };
     }
-    console.error("[sms] Fast2SMS rejected:", data?.message || data);
-    return { ok: false, error: Array.isArray(data?.message) ? data.message[0] : data?.message };
+    
+    console.error("[sms] Message Central rejected:", data);
+    return { ok: false, error: data?.message || "SMS Provider rejected request" };
   } catch (error: any) {
     console.error("[sms] request failed:", error?.message);
     return { ok: false, error: "Could not reach the SMS provider" };
