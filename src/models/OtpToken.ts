@@ -2,7 +2,8 @@ import mongoose, { Document, Schema } from "mongoose";
 
 export interface IOtpToken extends Document {
   phone: string;
-  codeHash: string;
+  codeHash?: string;
+  messageCentralVerificationId?: string;
   purpose: "registration" | "login";
   expiresAt: Date;
   attempts: number;
@@ -20,7 +21,8 @@ export interface IOtpToken extends Document {
 const otpTokenSchema = new Schema<IOtpToken>(
   {
     phone: { type: String, required: true, index: true },
-    codeHash: { type: String, required: true },
+    codeHash: { type: String },
+    messageCentralVerificationId: { type: String },
     purpose: { type: String, enum: ["registration", "login"], required: true },
     expiresAt: { type: Date, required: true },
     attempts: { type: Number, default: 0 },

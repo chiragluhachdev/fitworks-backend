@@ -106,26 +106,26 @@ export const sendOtp = async (req: Request, res: Response): Promise<any> => {
     const code = generateOtp();
     const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60_000);
 
+    const sms = await sendSms(phone, otpMessage(code, purpose));
+    if (!sms.ok) {
+      return res.status(502).json({
+        success: false,
+        message: sms.error || "Could not send the OTP. Please try again.",
+      });
+    }
+
     // One live challenge per number+purpose — replace any earlier unverified one.
     await OtpToken.deleteMany({ phone, purpose, verified: false });
     await OtpToken.create({
       phone,
       codeHash: hashOtp(code),
+      messageCentralVerificationId: sms.requestId, // Save the ID returned from Message Central
       purpose,
       expiresAt,
       lastSentAt: now,
       sendCount,
       windowStartedAt,
     });
-
-    const sms = await sendSms(phone, otpMessage(code, purpose));
-    if (!sms.ok) {
-      await OtpToken.deleteMany({ phone, purpose, verified: false });
-      return res.status(502).json({
-        success: false,
-        message: sms.error || "Could not send the OTP. Please try again.",
-      });
-    }
 
     return res.status(200).json({
       success: true,
@@ -164,9 +164,28 @@ export const verifyOtp = async (req: Request, res: Response): Promise<any> => {
       return res.status(429).json({ success: false, message: "Too many incorrect attempts. Please request a new OTP." });
     }
 
-    const provided = Buffer.from(hashOtp(code), "utf8");
-    const expected = Buffer.from(token.codeHash, "utf8");
-    const matches = provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+    // If we have a Message Central Verification ID, validate against their API
+    let matches = false;
+    if (token.messageCentralVerificationId) {
+      try {
+        const tokenVal = process.env.MESSAGE_CENTRAL_AUTH_TOKEN;
+        const res = await fetch(
+          `https://cpaas.messagecentral.com/verification/v3/validateOtp?countryCode=91&mobileNumber=${phone}&verificationId=${token.messageCentralVerificationId}&code=${code}`,
+          { headers: { authToken: tokenVal || "" } }
+        );
+        const data = await res.json();
+        if (res.ok && data?.responseCode === 200) {
+          matches = true;
+        }
+      } catch (err) {
+        console.error("Message Central Validate Error:", err);
+      }
+    } else if (token.codeHash) {
+      // Fallback to local hash verification if no external ID exists
+      const provided = Buffer.from(hashOtp(code), "utf8");
+      const expected = Buffer.from(token.codeHash, "utf8");
+      matches = provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+    }
 
     if (!matches) {
       token.attempts += 1;
