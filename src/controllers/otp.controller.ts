@@ -165,7 +165,11 @@ export const verifyOtp = async (req: Request, res: Response): Promise<any> => {
     }
 
     // If we have a Message Central Verification ID, validate against their API
+    // If we have a Message Central Verification ID, validate against their API
     let matches = false;
+    
+    /* 
+    // Message Central Logic (Commented out)
     if (token.messageCentralVerificationId) {
       try {
         const tokenVal = process.env.MESSAGE_CENTRAL_AUTH_TOKEN;
@@ -181,7 +185,10 @@ export const verifyOtp = async (req: Request, res: Response): Promise<any> => {
         console.error("Message Central Validate Error:", err);
       }
     } else if (token.codeHash) {
-      // Fallback to local hash verification if no external ID exists
+    */
+
+    if (token.codeHash) {
+      // Fallback to local hash verification for Fast2SMS
       const provided = Buffer.from(hashOtp(code), "utf8");
       const expected = Buffer.from(token.codeHash, "utf8");
       matches = provided.length === expected.length && crypto.timingSafeEqual(provided, expected);

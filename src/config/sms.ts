@@ -1,10 +1,11 @@
 import crypto from "crypto";
 
-const MESSAGE_CENTRAL_URL = "https://cpaas.messagecentral.com/verification/v3/send";
+const FAST2SMS_URL = "https://www.fast2sms.com/dev/bulkV2";
+// const MESSAGE_CENTRAL_URL = "https://cpaas.messagecentral.com/verification/v3/send";
 
 // Read at call time, not module load: ES imports are evaluated before
 // dotenv.config() runs in index.ts, so a top-level read is always empty.
-const apiKey = () => process.env.MESSAGE_CENTRAL_AUTH_TOKEN || "";
+const apiKey = () => process.env.FAST2SMS_API_KEY || ""; // process.env.MESSAGE_CENTRAL_AUTH_TOKEN || "";
 
 export const smsConfigured = () => Boolean(apiKey());
 
@@ -15,16 +16,17 @@ export interface SmsResult {
 }
 
 /**
- * Sends one transactional SMS through Message Central.
+ * Sends one transactional SMS through Fast2SMS.
  */
 export const sendSms = async (phone: string, message: string): Promise<SmsResult> => {
   const token = apiKey();
   if (!token) {
-    console.warn(`[sms] MESSAGE_CENTRAL_AUTH_TOKEN not set — would have sent to ${phone}: ${message}`);
+    console.warn(`[sms] API_KEY not set — would have sent to ${phone}: ${message}`);
     return { ok: false, error: "SMS not configured" };
   }
 
-  // Use the MessageNow API endpoint by passing flowType=SMS and message
+  /* 
+  // Message Central Logic (Commented out)
   const url = new URL(MESSAGE_CENTRAL_URL);
   url.searchParams.set("countryCode", "91");
   url.searchParams.set("flowType", "SMS");
@@ -36,15 +38,38 @@ export const sendSms = async (phone: string, message: string): Promise<SmsResult
       method: "POST",
       headers: { authToken: token } 
     });
-    
     const data: any = await res.json().catch(() => ({}));
-    
-    // Message Central success response typically has responseCode 200
     if (res.ok && data?.responseCode === 200) {
       return { ok: true, requestId: data?.data?.verificationId || data?.data?.transactionId };
     }
-    
-    console.error("[sms] Message Central rejected:", data);
+    return { ok: false, error: data?.message || "SMS Provider rejected request" };
+  } catch (error: any) {
+    return { ok: false, error: "Could not reach the SMS provider" };
+  }
+  */
+
+  // Fast2SMS Logic
+  const route = process.env.FAST2SMS_ROUTE || "q";
+  const url = new URL(FAST2SMS_URL);
+  url.searchParams.set("numbers", phone);
+
+  if (route === "otp") {
+    const code = message.match(/\d{4,8}/)?.[0] || "";
+    url.searchParams.set("route", "otp");
+    url.searchParams.set("variables_values", code);
+  } else {
+    url.searchParams.set("route", route);
+    url.searchParams.set("message", message);
+    url.searchParams.set("flash", "0");
+  }
+
+  try {
+    const res = await fetch(url, { headers: { authorization: token } });
+    const data: any = await res.json().catch(() => ({}));
+    if (data?.return === true) {
+      return { ok: true, requestId: data.request_id };
+    }
+    console.error("[sms] Fast2SMS rejected:", data);
     return { ok: false, error: data?.message || "SMS Provider rejected request" };
   } catch (error: any) {
     console.error("[sms] request failed:", error?.message);
