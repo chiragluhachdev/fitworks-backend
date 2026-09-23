@@ -45,10 +45,17 @@ export const createJob = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Gym ID or slug is required" });
     }
 
-    // The gym id arrives in the body, so it has to be checked — otherwise one
-    // gym could post vacancies in another gym's name.
     if (!isOwnerOrAdmin(req.user, targetGymId)) {
       return res.status(403).json({ success: false, message: "Not authorized to post vacancies for this gym" });
+    }
+
+    const gym = await Gym.findById(targetGymId);
+    if (!gym) {
+      return res.status(404).json({ success: false, message: "Gym not found" });
+    }
+
+    if (gym.subscription?.status !== "active") {
+      return res.status(403).json({ success: false, message: "You need an active subscription to post a vacancy." });
     }
 
     const job = await Job.create({
