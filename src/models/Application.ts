@@ -16,7 +16,6 @@ export const CANDIDATE_STAGES = [
   "contacted",
   "interested",
   "not_interested",
-  "shared",
   "connected",
   "hired",
   "rejected",
@@ -35,7 +34,8 @@ export interface IApplication extends Document {
   /** Internal — never returned to a gym or a trainer. */
   adminNotes?: string;
   contactedAt?: Date;
-  sharedAt?: Date;
+  /** When we put this trainer and this gym in touch with each other. */
+  connectedAt?: Date;
   appliedAt: Date;
   updatedAt: Date;
 }
@@ -75,7 +75,7 @@ const applicationSchema = new Schema<IApplication>(
       type: String,
     },
     contactedAt: { type: Date },
-    sharedAt: { type: Date },
+    connectedAt: { type: Date },
     appliedAt: {
       type: Date,
       default: Date.now,

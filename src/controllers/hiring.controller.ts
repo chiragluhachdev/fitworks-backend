@@ -231,8 +231,9 @@ export const updateShortlistEntry = async (req: Request, res: Response) => {
       }
       row.status = status;
       if (status === "contacted" && !row.contactedAt) row.contactedAt = new Date();
-      // "shared" is the moment this trainer becomes visible to the gym.
-      if (["shared", "connected", "hired"].includes(status) && !row.sharedAt) row.sharedAt = new Date();
+      // Connecting is the handover: from here the gym and the trainer are
+      // talking to each other, with us alongside.
+      if (["connected", "hired"].includes(status) && !row.connectedAt) row.connectedAt = new Date();
     }
     if (adminNotes !== undefined) row.adminNotes = adminNotes;
 
@@ -245,8 +246,8 @@ export const updateShortlistEntry = async (req: Request, res: Response) => {
         if (status === "hired") {
           job.pipelineStatus = "filled";
           job.status = "closed";
-        } else if (["shared", "connected"].includes(status)) {
-          job.pipelineStatus = status === "connected" ? "connecting" : "gym_contacted";
+        } else if (status === "connected") {
+          job.pipelineStatus = "connecting";
         }
         await job.save();
       }

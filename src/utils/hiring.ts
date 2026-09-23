@@ -166,15 +166,8 @@ export const IN_REVIEW_STAGES: CandidateStage[] = [
   "shortlisted",
   "contacted",
   "interested",
-  "shared",
   "reviewing",
   "applied",
 ];
 
-/**
- * Stages where the gym has already been told about this trainer.
- *
- * Gyms don't browse candidates — our team calls them — so this is an internal
- * marker of how far a conversation has got, not a visibility rule.
- */
-export const SHARED_WITH_GYM_STAGES: CandidateStage[] = ["shared", "connected", "hired"];
+

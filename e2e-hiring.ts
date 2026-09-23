@@ -208,22 +208,30 @@ async function main() {
     String(ownerList.json?.data?.[0]?.candidatesInReview));
   check("and no shared count", ownerList.json?.data?.[0]?.candidatesShared === undefined);
 
-  /* ── 8. Admin contacts, then shares ── */
-  console.log("\n6. Admin contacts, then shares");
+  /* ── 8. Admin contacts the trainer, then connects them ── */
+  console.log("\n6. Admin contacts, then connects");
   const contacted = await call(`/admin/hiring/shortlist/${rowId}`,
     { method: "PATCH", body: { status: "contacted" } }, adminToken);
   check("marked contacted", contacted.json?.data?.status === "contacted");
   check("contactedAt recorded", !!contacted.json?.data?.contactedAt);
 
-  const shared = await call(`/admin/hiring/shortlist/${rowId}`,
-    { method: "PATCH", body: { status: "shared" } }, adminToken);
-  check("marked shared", shared.json?.data?.status === "shared");
-  check("sharedAt recorded", !!shared.json?.data?.sharedAt);
+  const interested = await call(`/admin/hiring/shortlist/${rowId}`,
+    { method: "PATCH", body: { status: "interested" } }, adminToken);
+  check("marked interested", interested.json?.data?.status === "interested");
 
-  const afterShare = await call(`/admin/hiring/vacancies/${jobId}`, {}, adminToken);
-  check("vacancy moved to 'gym_contacted'",
-    afterShare.json?.data?.vacancy?.pipelineStatus === "gym_contacted",
-    afterShare.json?.data?.vacancy?.pipelineStatus);
+  const staleStage = await call(`/admin/hiring/shortlist/${rowId}`,
+    { method: "PATCH", body: { status: "shared" } }, adminToken);
+  check("the retired 'shared' stage is refused", staleStage.status === 400, `${staleStage.status}`);
+
+  const connected = await call(`/admin/hiring/shortlist/${rowId}`,
+    { method: "PATCH", body: { status: "connected" } }, adminToken);
+  check("marked connected", connected.json?.data?.status === "connected");
+  check("connectedAt recorded", !!connected.json?.data?.connectedAt);
+
+  const afterConnect = await call(`/admin/hiring/vacancies/${jobId}`, {}, adminToken);
+  check("vacancy moved to 'connecting'",
+    afterConnect.json?.data?.vacancy?.pipelineStatus === "connecting",
+    afterConnect.json?.data?.vacancy?.pipelineStatus);
 
   /* ── 9. The trainer's details never reach the gym ── */
   console.log("\n7. The trainer's details never reach the gym");
