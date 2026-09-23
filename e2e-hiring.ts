@@ -8,6 +8,7 @@
  */
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import dotenv from "dotenv";
 import { User } from "./src/models/User";
 import { Gym } from "./src/models/Gym";
@@ -247,21 +248,132 @@ async function main() {
   const pendingJobs = await call("/jobs", {}, pending.token);
   check("an unverified trainer still sees nothing", pendingJobs.status === 403 && pendingJobs.json?.locked === true, `${pendingJobs.status}`);
 
-  /* ── 12. Gym membership ── */
-  console.log("\n10. Gym membership");
-  const request = await call(`/gyms/${gym.slug}/plan-request`, { method: "POST", body: { plan: "annual" } }, gymToken);
-  check("gym can request a plan", request.status === 200 && request.json?.subscription?.requestedPlan === "annual");
-  const badPlan = await call(`/gyms/${gym.slug}/plan-request`, { method: "POST", body: { plan: "lifetime" } }, gymToken);
+  /* ── 12. Gym membership: Razorpay ── */
+  console.log("\n10. Gym membership (Razorpay)");
+
+  // Every webhook below is signed with the scratch secret and handled entirely
+  // by our own code — nothing in this file reaches Razorpay's API.
+  const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET as string;
+  const sendWebhook = async (body: any) => {
+    const raw = JSON.stringify(body);
+    const signature = crypto.createHmac("sha256", WEBHOOK_SECRET).update(raw).digest("hex");
+    const res = await fetch(`${BASE}/payments/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-razorpay-signature": signature },
+      body: raw,
+    });
+    return { status: res.status, json: await res.json().catch(() => ({})) };
+  };
+
+  const capture = (over: any = {}) => ({
+    event: "payment.captured",
+    payload: {
+      payment: {
+        entity: {
+          id: over.id || `pay_e2e_${Date.now()}`,
+          order_id: over.order_id || "order_e2e_1",
+          amount: over.amount ?? 99900,
+          notes: { kind: "gym_membership", gymId: String(gym._id), gymSlug: gym.slug, plan: over.plan || "annual" },
+        },
+      },
+    },
+  });
+
+  const membership = async () => (await call(`/gyms/${gym.slug}/membership`, {}, gymToken)).json;
+
+  const before = await membership();
+  check("membership starts inactive", before?.subscription?.isActive === false);
+  check("plan catalogue returned", before?.plans?.length === 3, String(before?.plans?.length));
+  check("no payments yet", before?.history?.length === 0);
+
+  /* An unsigned webhook must be refused outright. */
+  const unsigned = await fetch(`${BASE}/payments/webhook`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(capture()),
+  });
+  check("unsigned webhook refused", unsigned.status === 400, `${unsigned.status}`);
+
+  const forged = await fetch(`${BASE}/payments/webhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-razorpay-signature": "deadbeef".repeat(8) },
+    body: JSON.stringify(capture()),
+  });
+  check("forged signature refused", forged.status === 400, `${forged.status}`);
+
+  /* An underpaid order must not buy a term. */
+  const underpaid = await sendWebhook(capture({ id: "pay_e2e_under", order_id: "order_e2e_under", amount: 19900, plan: "annual" }));
+  check("underpaid webhook accepted but ignored", underpaid.status === 200);
+  const afterUnderpaid = await membership();
+  check("underpayment grants nothing", afterUnderpaid?.subscription?.isActive === false);
+
+  /* The real thing. */
+  const paid = await sendWebhook(capture({ id: "pay_e2e_annual", order_id: "order_e2e_annual", amount: 99900, plan: "annual" }));
+  check("captured payment accepted", paid.status === 200);
+  const afterPaid = await membership();
+  check("membership is active", afterPaid?.subscription?.isActive === true, JSON.stringify(afterPaid?.subscription));
+  check("on the annual plan", afterPaid?.subscription?.plan === "annual");
+  const firstDays = afterPaid?.subscription?.daysLeft;
+  check("a year of cover", firstDays > 300 && firstDays <= 366, `daysLeft=${firstDays}`);
+  check("receipt recorded", afterPaid?.history?.length === 1, String(afterPaid?.history?.length));
+  check("receipt shows ₹999", afterPaid?.history?.[0]?.amount === 999, String(afterPaid?.history?.[0]?.amount));
+  const firstStarted = afterPaid?.subscription?.startedAt;
+
+  /* Razorpay retries. The same payment must not buy a second year. */
+  const replay = await sendWebhook(capture({ id: "pay_e2e_annual", order_id: "order_e2e_annual", amount: 99900, plan: "annual" }));
+  check("replayed webhook accepted", replay.status === 200);
+  const afterReplay = await membership();
+  check("replay buys nothing extra", afterReplay?.subscription?.daysLeft === firstDays, `${afterReplay?.subscription?.daysLeft} vs ${firstDays}`);
+  check("and adds no second receipt", afterReplay?.history?.length === 1);
+
+  /* Renewing early keeps the days already paid for. */
+  const renew = await sendWebhook(capture({ id: "pay_e2e_monthly", order_id: "order_e2e_monthly", amount: 19900, plan: "monthly" }));
+  check("renewal accepted", renew.status === 200);
+  const afterRenew = await membership();
+  check("renewal extends rather than resets", afterRenew?.subscription?.daysLeft > firstDays, `${afterRenew?.subscription?.daysLeft} vs ${firstDays}`);
+  check("member-since is unchanged", afterRenew?.subscription?.startedAt === firstStarted);
+  check("two receipts now", afterRenew?.history?.length === 2, String(afterRenew?.history?.length));
+
+  /* Checkout guards. */
+  const badPlan = await call(`/gyms/${gym.slug}/membership/order`, { method: "POST", body: { plan: "lifetime" } }, gymToken);
   check("an unknown plan is refused", badPlan.status === 400, `${badPlan.status}`);
 
-  const activate = await call(`/admin/gyms/${gym._id}/subscription`, { method: "PUT", body: { plan: "annual" } }, adminToken);
-  check("admin activates it", activate.status === 200 && activate.json?.subscription?.isActive === true, JSON.stringify(activate.json?.subscription));
-  const days = activate.json?.subscription?.daysLeft;
-  check("expiry is a year out", days > 300 && days <= 366, `daysLeft=${days}`);
-  check("request cleared once activated", !activate.json?.subscription?.requestedPlan);
+  const strangerOrder = await call(`/gyms/${gym.slug}/membership/order`, { method: "POST", body: { plan: "monthly" } }, otherToken);
+  check("another gym can't raise an order here", strangerOrder.status === 403, `${strangerOrder.status}`);
+
+  const trainerOrder = await call(`/gyms/${gym.slug}/membership/order`, { method: "POST", body: { plan: "monthly" } }, verified.token);
+  check("a trainer can't either", trainerOrder.status === 403, `${trainerOrder.status}`);
+
+  /* Verification refuses anything it did not raise. */
+  const forgedVerify = await call(`/gyms/${gym.slug}/membership/verify`, {
+    method: "POST",
+    body: { razorpay_order_id: "order_fake", razorpay_payment_id: "pay_fake", razorpay_signature: "nope" },
+  }, gymToken);
+  check("a forged signature is refused", forgedVerify.status === 400, `${forgedVerify.status}`);
+
+  const wellSigned = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET as string)
+    .update("order_not_ours|pay_not_ours").digest("hex");
+  const strayOrder = await call(`/gyms/${gym.slug}/membership/verify`, {
+    method: "POST",
+    body: { razorpay_order_id: "order_not_ours", razorpay_payment_id: "pay_not_ours", razorpay_signature: wellSigned },
+  }, gymToken);
+  check("a correctly signed but unknown order is refused", strayOrder.status === 400, `${strayOrder.status}`);
+
+  const strangerMembership = await call(`/gyms/${gym.slug}/membership`, {}, otherToken);
+  check("another gym can't read the membership", strangerMembership.status === 403, `${strangerMembership.status}`);
+
+  /* Admin override still works, and takes no money. */
+  const override = await call(`/admin/gyms/${gym._id}/subscription`, { method: "PUT", body: { plan: "monthly" } }, adminToken);
+  check("admin can grant a term", override.status === 200 && override.json?.subscription?.isActive === true);
+  const afterOverride = await membership();
+  check("a granted term writes no receipt", afterOverride?.history?.length === 2, String(afterOverride?.history?.length));
+
+  const deactivated = await call(`/admin/gyms/${gym._id}/subscription`, { method: "PUT", body: { action: "deactivate" } }, adminToken);
+  check("admin can deactivate", deactivated.json?.subscription?.isActive === false);
 
   const gymSelfActivate = await call(`/admin/gyms/${gym._id}/subscription`, { method: "PUT", body: { plan: "annual" } }, gymToken);
-  check("a gym can't activate its own plan", gymSelfActivate.status === 403, `${gymSelfActivate.status}`);
+  check("a gym can't grant itself a plan", gymSelfActivate.status === 403, `${gymSelfActivate.status}`);
+
+  // Put it back so the dashboard assertions below see a live membership.
+  await call(`/admin/gyms/${gym._id}/subscription`, { method: "PUT", body: { plan: "annual" } }, adminToken);
 
   const finalDash = await call(`/gyms/${gym.slug}/dashboard`, {}, gymToken);
   check("dashboard shows the active plan", finalDash.json?.data?.subscription?.isActive === true);

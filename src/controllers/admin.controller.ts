@@ -27,8 +27,13 @@ export const getDashboardStats = async (req: Request, res: Response) => {
     });
     const filledVacancies = await Job.countDocuments({ pipelineStatus: "filled" });
     const trainersInReview = await Application.countDocuments({ status: { $in: IN_REVIEW_STAGES } });
-    const payingGyms = await Gym.countDocuments({ "subscription.status": "active" });
-    const planRequests = await Gym.countDocuments({ "subscription.requestedPlan": { $ne: null } });
+    const payingGyms = await Gym.countDocuments({
+      "subscription.status": "active",
+      $or: [{ "subscription.expiresAt": { $gt: new Date() } }, { "subscription.expiresAt": null }],
+    });
+    const lapsedGyms = await Gym.countDocuments({
+      "subscription.expiresAt": { $lt: new Date() },
+    });
     const activeMembers = await Trainer.countDocuments(activatedTrainerFilter());
     const lapsedMembers = totalTrainers - activeMembers;
 
@@ -51,7 +56,7 @@ export const getDashboardStats = async (req: Request, res: Response) => {
         filledVacancies,
         trainersInReview,
         payingGyms,
-        planRequests,
+        lapsedGyms,
       }
     });
   } catch (error: any) {

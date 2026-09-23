@@ -8,6 +8,9 @@ import {
   ACTIVATION_PLAN,
   getActivationState,
 } from "../utils/subscription";
+import { Gym } from "../models/Gym";
+import { findPlan } from "../utils/hiring";
+import { applyGymMembership } from "../utils/gymMembership";
 
 /**
  * Activates a trainer permanently and records the payment.
@@ -183,6 +186,44 @@ export const verifyTrainerPayment = async (req: Request, res: Response): Promise
   }
 };
 
+/**
+ * Applies a captured gym membership payment from the webhook.
+ *
+ * The plan is taken from the order's own notes, which we wrote when raising it,
+ * and the amount is checked against that plan's price — an underpaid order must
+ * never buy a term.
+ */
+const applyCapturedGymPayment = async (payment: any) => {
+  const gym = payment.notes?.gymId
+    ? await Gym.findById(payment.notes.gymId).select("subscription slug")
+    : await Gym.findOne({ "subscription.pendingOrderId": payment.order_id }).select("subscription slug");
+
+  if (!gym) {
+    console.warn(`Webhook: no gym matched order ${payment.order_id}`);
+    return;
+  }
+
+  const plan = findPlan(payment.notes?.plan) || findPlan(gym.subscription?.pendingPlan);
+  if (!plan) {
+    console.warn(`Webhook: no plan on gym order ${payment.order_id}`);
+    return;
+  }
+  if (Number(payment.amount) < plan.price * 100) {
+    console.warn(`Webhook: underpaid gym order ${payment.order_id} — ${payment.amount} paise`);
+    return;
+  }
+
+  await applyGymMembership(
+    { _id: gym._id },
+    {
+      orderId: payment.order_id,
+      paymentId: payment.id,
+      amountPaise: Number(payment.amount),
+      plan: plan.id,
+    }
+  );
+};
+
 /* ─────────────────────────────── WEBHOOK ─────────────────────────────── */
 
 /**
@@ -210,7 +251,14 @@ export const razorpayWebhook = async (req: Request, res: Response): Promise<any>
     const event = req.body?.event as string;
     const payment = req.body?.payload?.payment?.entity;
 
-    if (event === "payment.captured" && payment) {
+    // Gyms and trainers share this endpoint. The notes were written by us when
+    // the order was raised and come back inside a signed payload, so they are
+    // the right thing to route on.
+    const isGymPayment = payment?.notes?.kind === "gym_membership" || !!payment?.notes?.gymId;
+
+    if (event === "payment.captured" && payment && isGymPayment) {
+      await applyCapturedGymPayment(payment);
+    } else if (event === "payment.captured" && payment) {
       if (Number(payment.amount) >= ACTIVATION_AMOUNT_PAISE) {
         const trainerId = payment.notes?.trainerId;
         const filter = trainerId
@@ -228,6 +276,12 @@ export const razorpayWebhook = async (req: Request, res: Response): Promise<any>
     }
 
     if (event === "payment.failed" && payment) {
+      // Clear the abandoned order so the next attempt starts clean. Only one of
+      // these can match, since an order belongs to one gym or one trainer.
+      await Gym.findOneAndUpdate(
+        { "subscription.pendingOrderId": payment.order_id },
+        { $unset: { "subscription.pendingOrderId": "", "subscription.pendingPlan": "" } }
+      );
       await Trainer.findOneAndUpdate(
         { "subscription.pendingOrderId": payment.order_id },
         { $unset: { "subscription.pendingOrderId": "" } }

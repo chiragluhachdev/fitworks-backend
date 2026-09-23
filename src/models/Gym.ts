@@ -36,13 +36,27 @@ export interface IGym extends Document {
   subscription: {
     plan: "none" | "monthly" | "quarterly" | "annual";
     status: "inactive" | "active" | "expired";
+    /** When this gym first became a member. Written once. */
     startedAt?: Date;
+    /** End of the term currently paid for. */
     expiresAt?: Date;
     /** Rupees charged for the current term. */
     amount?: number;
-    /** A plan the gym asked for; the team activates it by hand. */
-    requestedPlan?: "monthly" | "quarterly" | "annual";
-    requestedAt?: Date;
+    /** The order we are waiting on, and the plan it was raised for. */
+    pendingOrderId?: string;
+    pendingPlan?: "monthly" | "quarterly" | "annual";
+    lastOrderId?: string;
+    lastPaymentId?: string;
+    /** Immutable payment record — every term this gym has bought. */
+    history: {
+      orderId: string;
+      paymentId: string;
+      plan: string;
+      amount: number;
+      paidAt: Date;
+      periodStart: Date;
+      periodEnd: Date;
+    }[];
   };
   slug: string;
   createdAt: Date;
@@ -118,11 +132,27 @@ const gymSchema = new Schema<IGym>(
       startedAt: { type: Date },
       expiresAt: { type: Date },
       amount: { type: Number },
-      requestedPlan: {
+      // Held between raising the order and the payment coming back, so the
+      // term is decided by what we charged for — never by what the browser
+      // sends us at verification time.
+      pendingOrderId: { type: String },
+      pendingPlan: {
         type: String,
         enum: ["monthly", "quarterly", "annual"],
       },
-      requestedAt: { type: Date },
+      lastOrderId: { type: String },
+      lastPaymentId: { type: String },
+      history: [
+        {
+          orderId: { type: String, required: true },
+          paymentId: { type: String, required: true },
+          plan: { type: String, required: true },
+          amount: { type: Number, required: true },
+          paidAt: { type: Date, required: true },
+          periodStart: { type: Date, required: true },
+          periodEnd: { type: Date, required: true },
+        },
+      ],
     },
     slug: {
       type: String,
@@ -132,5 +162,8 @@ const gymSchema = new Schema<IGym>(
   },
   { timestamps: true }
 );
+
+gymSchema.index({ "subscription.pendingOrderId": 1 });
+gymSchema.index({ "subscription.status": 1, "subscription.expiresAt": 1 });
 
 export const Gym = mongoose.model<IGym>("Gym", gymSchema);

@@ -5,6 +5,7 @@ import { Trainer } from "../models/Trainer";
 import { Application, CANDIDATE_STAGES } from "../models/Application";
 import { PIPELINE_STAGES } from "../models/Job";
 import { findPlan, getGymSubscriptionState, gymVacancyStatus, IN_REVIEW_STAGES } from "../utils/hiring";
+import { addMonths, nextPeriodStart } from "../utils/gymMembership";
 
 /**
  * The admin side of the hiring workflow.
@@ -276,11 +277,16 @@ export const removeShortlistEntry = async (req: Request, res: Response) => {
 };
 
 /**
- * Sets a gym's membership by hand.
+ * Grants or revokes a gym's membership by hand.
  *
- * There is no payment gateway for gyms yet, so an admin records the plan after
- * taking payment outside the product. The expiry is computed from the plan's
- * own length rather than typed in, so the two can't drift apart.
+ * Gyms pay through Razorpay; this is the support override for the cases a
+ * gateway cannot cover — comping a partner, honouring a payment that failed to
+ * come back, or cutting off an account. It writes no payment record, because
+ * no payment was taken, and it is logged so a free term is never mistaken for
+ * a purchased one.
+ *
+ * The expiry is computed from the plan's own length rather than typed in, so
+ * the two cannot drift apart.
  */
 export const updateGymSubscription = async (req: Request, res: Response) => {
   try {
@@ -293,22 +299,27 @@ export const updateGymSubscription = async (req: Request, res: Response) => {
 
     if (action === "deactivate") {
       gym.subscription.status = "inactive";
+      console.log(`Admin ${req.user?.userId} deactivated membership for ${gym.slug}.`);
     } else {
       const chosen = findPlan(plan);
       if (!chosen) {
         return res.status(400).json({ success: false, message: "Unknown plan" });
       }
-      const start = new Date();
-      const end = new Date(start);
-      end.setMonth(end.getMonth() + chosen.months);
+      // Extends from the current expiry, exactly as a paid renewal would, so a
+      // comped month on top of a live term doesn't throw away what's left.
+      const start = nextPeriodStart(gym.subscription?.expiresAt);
+      const end = addMonths(start, chosen.months);
 
       gym.subscription.plan = chosen.id;
       gym.subscription.status = "active";
-      gym.subscription.startedAt = start;
+      if (!gym.subscription.startedAt) gym.subscription.startedAt = new Date();
       gym.subscription.expiresAt = end;
       gym.subscription.amount = chosen.price;
-      gym.subscription.requestedPlan = undefined;
-      gym.subscription.requestedAt = undefined;
+      console.log(
+        `Admin ${req.user?.userId} granted ${chosen.name} to ${gym.slug} until ${end
+          .toISOString()
+          .slice(0, 10)} — no payment taken.`
+      );
     }
 
     await gym.save();

@@ -5,7 +5,6 @@ import { Application } from "../models/Application";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 import {
   GYM_PLANS,
-  findPlan,
   getGymSubscriptionState,
   gymVacancyStatus,
   IN_REVIEW_STAGES,
@@ -264,40 +263,4 @@ export const setGymInterest = async (req: Request, res: Response) => {
 /** The plan catalogue. Public — the pricing page reads it too. */
 export const getGymPlans = async (_req: Request, res: Response) => {
   res.status(200).json({ success: true, data: GYM_PLANS });
-};
-
-/**
- * Records that a gym wants a plan.
- *
- * Billing is handled by our team by hand for now, so this takes no money and
- * grants no access — it puts the request in front of an admin.
- */
-export const requestGymPlan = async (req: Request, res: Response) => {
-  try {
-    const plan = findPlan(req.body?.plan);
-    if (!plan) {
-      return res.status(400).json({ success: false, message: "Unknown plan" });
-    }
-
-    const gym = await Gym.findOne({ slug: req.params.slug });
-    if (!gym) {
-      return res.status(404).json({ success: false, message: "Gym not found" });
-    }
-    if (!isOwnerOrAdmin(req.user, gym._id)) {
-      return res.status(403).json({ success: false, message: "Not authorized" });
-    }
-
-    gym.subscription.requestedPlan = plan.id;
-    gym.subscription.requestedAt = new Date();
-    await gym.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Our team will get in touch to set up your plan.",
-      subscription: getGymSubscriptionState(gym.subscription),
-    });
-  } catch (error: any) {
-    console.error("Request Gym Plan Error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
 };

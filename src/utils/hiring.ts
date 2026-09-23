@@ -27,7 +27,8 @@ export interface GymSubscriptionState {
   expiresAt: Date | null;
   /** Whole days remaining, or null when there is no active term. */
   daysLeft: number | null;
-  requestedPlan: string | null;
+  /** The order we're waiting on, if checkout is mid-flight. */
+  pendingOrderId: string | null;
 }
 
 /**
@@ -49,7 +50,7 @@ export const getGymSubscriptionState = (sub: any): GymSubscriptionState => {
     startedAt: sub?.startedAt ? new Date(sub.startedAt) : null,
     expiresAt,
     daysLeft: active && expiresAt ? Math.ceil((expiresAt.getTime() - Date.now()) / 86400000) : null,
-    requestedPlan: sub?.requestedPlan || null,
+    pendingOrderId: sub?.pendingOrderId || null,
   };
 };
 
