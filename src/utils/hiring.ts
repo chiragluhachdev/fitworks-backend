@@ -17,8 +17,10 @@ export { DEFAULT_GYM_PRICES };
  */
 const PLAN_SHAPE = [
   { id: "monthly", name: "FitWorks Monthly", months: 1, cadence: "per month", best: false },
-  { id: "quarterly", name: "FitWorks 3 Months", months: 3, cadence: "per 3 months", best: false },
-  { id: "annual", name: "FitWorks Annual", months: 12, cadence: "per year", best: true },
+  // The one we point people at: a quarter is long enough for our team to
+  // actually fill a role, without asking a new gym to commit to a year.
+  { id: "quarterly", name: "FitWorks 3 Months", months: 3, cadence: "per 3 months", best: true },
+  { id: "annual", name: "FitWorks Annual", months: 12, cadence: "per year", best: false },
 ] as const;
 
 export type GymPlanId = (typeof PLAN_SHAPE)[number]["id"];
