@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { Gym } from "../models/Gym";
 import { getRazorpay, keyId, keySecret } from "../config/razorpay";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
-import { GYM_PLANS, findPlan, getGymSubscriptionState } from "../utils/hiring";
+import { getPricedPlans, findPricedPlan, getGymSubscriptionState } from "../utils/hiring";
 import { applyGymMembership, addMonths, nextPeriodStart } from "../utils/gymMembership";
 
 /**
@@ -30,7 +30,7 @@ export const createGymOrder = async (req: Request, res: Response): Promise<any> 
       });
     }
 
-    const plan = findPlan(req.body?.plan);
+    const plan = await findPricedPlan(req.body?.plan);
     if (!plan) {
       return res.status(400).json({ success: false, message: "Choose one of the FitWorks plans." });
     }
@@ -54,12 +54,14 @@ export const createGymOrder = async (req: Request, res: Response): Promise<any> 
         gymId: gym._id.toString(),
         gymSlug: gym.slug,
         plan: plan.id,
+        amountPaise: String(amountPaise),
         purpose: `FitWorks ${plan.name} membership`,
       },
     });
 
     gym.subscription.pendingOrderId = order.id;
     gym.subscription.pendingPlan = plan.id;
+    gym.subscription.pendingAmount = amountPaise;
     await gym.save();
 
     // What this payment buys, so checkout can say it plainly.
@@ -137,13 +139,18 @@ export const verifyGymPayment = async (req: Request, res: Response): Promise<any
     }
 
     // The plan comes from what we charged for, never from the request body.
-    const plan = findPlan(gym.subscription.pendingPlan);
+    const plan = await findPricedPlan(gym.subscription.pendingPlan);
     if (!plan) {
       return res.status(400).json({ success: false, message: "We couldn't match this payment to a plan." });
     }
 
     const order: any = await getRazorpay().orders.fetch(razorpay_order_id);
-    if (order.status !== "paid" || Number(order.amount_paid) < plan.price * 100) {
+
+    // Check what they paid against what we asked Razorpay for, not against
+    // today's price. An admin editing a plan's price while someone is at
+    // checkout must not invalidate a payment that matched the quote.
+    const quoted = Number(order.amount) || gym.subscription.pendingAmount || plan.price * 100;
+    if (order.status !== "paid" || Number(order.amount_paid) < quoted) {
       return res.status(400).json({
         success: false,
         message: `Payment not complete (status: ${order.status})`,
@@ -191,7 +198,7 @@ export const getGymMembership = async (req: Request, res: Response): Promise<any
     return res.status(200).json({
       success: true,
       subscription: getGymSubscriptionState(gym.subscription),
-      plans: GYM_PLANS,
+      plans: await getPricedPlans(),
       paymentsEnabled: gatewayReady(),
       history,
     });

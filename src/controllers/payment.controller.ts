@@ -9,7 +9,7 @@ import {
   getActivationState,
 } from "../utils/subscription";
 import { Gym } from "../models/Gym";
-import { findPlan } from "../utils/hiring";
+import { findPricedPlan } from "../utils/hiring";
 import { applyGymMembership } from "../utils/gymMembership";
 
 /**
@@ -203,13 +203,22 @@ const applyCapturedGymPayment = async (payment: any) => {
     return;
   }
 
-  const plan = findPlan(payment.notes?.plan) || findPlan(gym.subscription?.pendingPlan);
+  const plan =
+    (await findPricedPlan(payment.notes?.plan)) ||
+    (await findPricedPlan(gym.subscription?.pendingPlan));
   if (!plan) {
     console.warn(`Webhook: no plan on gym order ${payment.order_id}`);
     return;
   }
-  if (Number(payment.amount) < plan.price * 100) {
-    console.warn(`Webhook: underpaid gym order ${payment.order_id} — ${payment.amount} paise`);
+  // The quote we raised the order with, carried in the notes we wrote. Falls
+  // back to the pending amount, then to today's price — a plan whose price has
+  // since been edited must not make a matching payment look like an underpay.
+  const quoted =
+    Number(payment.notes?.amountPaise) || gym.subscription?.pendingAmount || plan.price * 100;
+  if (Number(payment.amount) < quoted) {
+    console.warn(
+      `Webhook: underpaid gym order ${payment.order_id} — ${payment.amount} of ${quoted} paise`
+    );
     return;
   }
 
@@ -280,7 +289,13 @@ export const razorpayWebhook = async (req: Request, res: Response): Promise<any>
       // these can match, since an order belongs to one gym or one trainer.
       await Gym.findOneAndUpdate(
         { "subscription.pendingOrderId": payment.order_id },
-        { $unset: { "subscription.pendingOrderId": "", "subscription.pendingPlan": "" } }
+        {
+          $unset: {
+            "subscription.pendingOrderId": "",
+            "subscription.pendingPlan": "",
+            "subscription.pendingAmount": "",
+          },
+        }
       );
       await Trainer.findOneAndUpdate(
         { "subscription.pendingOrderId": payment.order_id },

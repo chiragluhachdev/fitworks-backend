@@ -4,7 +4,7 @@ import { Gym } from "../models/Gym";
 import { Trainer } from "../models/Trainer";
 import { Application, CANDIDATE_STAGES } from "../models/Application";
 import { PIPELINE_STAGES } from "../models/Job";
-import { findPlan, getGymSubscriptionState, gymVacancyStatus, IN_REVIEW_STAGES } from "../utils/hiring";
+import { findPricedPlan, getGymSubscriptionState, gymVacancyStatus, IN_REVIEW_STAGES } from "../utils/hiring";
 import { addMonths, nextPeriodStart } from "../utils/gymMembership";
 
 /**
@@ -301,7 +301,7 @@ export const updateGymSubscription = async (req: Request, res: Response) => {
       gym.subscription.status = "inactive";
       console.log(`Admin ${req.user?.userId} deactivated membership for ${gym.slug}.`);
     } else {
-      const chosen = findPlan(plan);
+      const chosen = await findPricedPlan(plan);
       if (!chosen) {
         return res.status(400).json({ success: false, message: "Unknown plan" });
       }

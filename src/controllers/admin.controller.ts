@@ -7,7 +7,14 @@ import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
 import { SystemSetting } from "../models/SystemSetting";
 import { getActivationState, activatedTrainerFilter, ACTIVATION_AMOUNT_PAISE } from "../utils/subscription";
-import { getGymSubscriptionState, gymVacancyStatus, IN_REVIEW_STAGES } from "../utils/hiring";
+import {
+  getGymSubscriptionState,
+  gymVacancyStatus,
+  IN_REVIEW_STAGES,
+  getPricedPlans,
+  clearPlanCache,
+  DEFAULT_GYM_PRICES,
+} from "../utils/hiring";
 
 export const getDashboardStats = async (req: Request, res: Response) => {
   try {
@@ -340,11 +347,28 @@ export const getSettings = async (req: Request, res: Response) => {
     if (!settings) {
       settings = await SystemSetting.create({});
     }
-    res.status(200).json({ success: true, data: settings });
+    res.status(200).json({
+      success: true,
+      data: settings,
+      // What the prices currently in effect actually work out to, so the
+      // settings screen shows the same figures a gym will see.
+      plans: await getPricedPlans(),
+      defaults: DEFAULT_GYM_PRICES,
+    });
   } catch (error: any) {
     console.error("Admin Get Settings Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
+};
+
+/** A price must be a whole number of rupees, and a sane one. */
+const readPrice = (value: unknown, label: string): { value?: number; error?: string } => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return { error: `${label} must be a number.` };
+  if (!Number.isInteger(n)) return { error: `${label} must be a whole number of rupees.` };
+  if (n < 1) return { error: `${label} must be at least ₹1.` };
+  if (n > 500000) return { error: `${label} looks like a mistake — cap is ₹5,00,000.` };
+  return { value: n };
 };
 
 export const updateSettings = async (req: Request, res: Response) => {
@@ -353,15 +377,58 @@ export const updateSettings = async (req: Request, res: Response) => {
     if (!settings) {
       settings = new SystemSetting();
     }
-    
+
     if (req.body.otpEnabled !== undefined) {
       settings.otpEnabled = req.body.otpEnabled;
     }
-    
+
+    const incoming = req.body.gymPlanPrices;
+    if (incoming && typeof incoming === "object") {
+      // A settings document saved before prices existed has no such field.
+      if (!settings.gymPlanPrices) {
+        settings.gymPlanPrices = { ...DEFAULT_GYM_PRICES };
+      }
+
+      const labels: Record<string, string> = {
+        monthly: "The monthly price",
+        quarterly: "The 3-month price",
+        annual: "The annual price",
+      };
+
+      for (const key of ["monthly", "quarterly", "annual"] as const) {
+        if (incoming[key] === undefined || incoming[key] === "") continue;
+        const { value, error } = readPrice(incoming[key], labels[key]);
+        if (error) return res.status(400).json({ success: false, message: error });
+        settings.gymPlanPrices[key] = value!;
+      }
+
+      const { monthly, quarterly, annual } = settings.gymPlanPrices;
+      // A longer term costing more in total than a shorter one is almost
+      // certainly a typo, and it would be visibly absurd on the pricing page.
+      if (quarterly < monthly || annual < quarterly) {
+        return res.status(400).json({
+          success: false,
+          message: "Each longer term should cost more in total than the one before it.",
+        });
+      }
+
+      console.log(
+        `Admin ${req.user?.userId} set gym prices to ₹${monthly} / ₹${quarterly} / ₹${annual}.`
+      );
+    }
+
     await settings.save();
-    res.status(200).json({ success: true, data: settings });
+    // Checkout reads prices through a short cache; drop it so the change is
+    // live immediately rather than up to a minute later.
+    clearPlanCache();
+
+    res.status(200).json({
+      success: true,
+      data: settings,
+      plans: await getPricedPlans(),
+    });
   } catch (error: any) {
     console.error("Admin Update Settings Error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+    res.status(500).json({ success: false, message: error?.message || "Server error" });
   }
 };

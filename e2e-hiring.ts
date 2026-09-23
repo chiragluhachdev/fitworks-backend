@@ -15,6 +15,7 @@ import { Gym } from "./src/models/Gym";
 import { Trainer } from "./src/models/Trainer";
 import { Job } from "./src/models/Job";
 import { Application } from "./src/models/Application";
+import { SystemSetting } from "./src/models/SystemSetting";
 
 dotenv.config();
 const BASE = "http://localhost:5099/api";
@@ -59,6 +60,7 @@ async function main() {
     Gym.deleteMany({ slug: /^e2e-/ }),
     Trainer.deleteMany({ slug: /^e2e-/ }),
   ]);
+  await SystemSetting.deleteMany({});
   const staleGyms = await Gym.find({ slug: /^e2e-/ }).select("_id");
   await Job.deleteMany({ gymId: { $in: staleGyms.map((g) => g._id) } });
 
@@ -265,21 +267,39 @@ async function main() {
     return { status: res.status, json: await res.json().catch(() => ({})) };
   };
 
-  const capture = (over: any = {}) => ({
-    event: "payment.captured",
-    payload: {
-      payment: {
-        entity: {
-          id: over.id || `pay_e2e_${Date.now()}`,
-          order_id: over.order_id || "order_e2e_1",
-          amount: over.amount ?? 99900,
-          notes: { kind: "gym_membership", gymId: String(gym._id), gymSlug: gym.slug, plan: over.plan || "annual" },
+  /**
+   * A captured payment shaped exactly as Razorpay sends one back, including the
+   * notes createGymOrder writes. `quoted` defaults to the amount paid; pass it
+   * separately to simulate someone paying less than we asked for.
+   */
+  const capture = (over: any = {}) => {
+    const amount = over.amount ?? 99900;
+    return {
+      event: "payment.captured",
+      payload: {
+        payment: {
+          entity: {
+            id: over.id || `pay_e2e_${Date.now()}`,
+            order_id: over.order_id || "order_e2e_1",
+            amount,
+            notes: {
+              kind: "gym_membership",
+              gymId: String(gym._id),
+              gymSlug: gym.slug,
+              plan: over.plan || "annual",
+              amountPaise: String(over.quoted ?? amount),
+            },
+          },
         },
       },
-    },
-  });
+    };
+  };
 
   const membership = async () => (await call(`/gyms/${gym.slug}/membership`, {}, gymToken)).json;
+
+  // Start from the launch prices however the previous run left them. Going
+  // through the endpoint is what clears the server's price cache.
+  await call("/admin/settings", { method: "PUT", body: { gymPlanPrices: { monthly: 199, quarterly: 499, annual: 999 } } }, adminToken);
 
   const before = await membership();
   check("membership starts inactive", before?.subscription?.isActive === false);
@@ -300,7 +320,9 @@ async function main() {
   check("forged signature refused", forged.status === 400, `${forged.status}`);
 
   /* An underpaid order must not buy a term. */
-  const underpaid = await sendWebhook(capture({ id: "pay_e2e_under", order_id: "order_e2e_under", amount: 19900, plan: "annual" }));
+  const underpaid = await sendWebhook(
+    capture({ id: "pay_e2e_under", order_id: "order_e2e_under", amount: 19900, quoted: 99900, plan: "annual" })
+  );
   check("underpaid webhook accepted but ignored", underpaid.status === 200);
   const afterUnderpaid = await membership();
   check("underpayment grants nothing", afterUnderpaid?.subscription?.isActive === false);
@@ -379,6 +401,109 @@ async function main() {
   check("dashboard shows the active plan", finalDash.json?.data?.subscription?.isActive === true);
   check("and the filled role", finalDash.json?.data?.stats?.filled === 1, String(finalDash.json?.data?.stats?.filled));
   check("with no active vacancies left", finalDash.json?.data?.stats?.activeVacancies === 0, String(finalDash.json?.data?.stats?.activeVacancies));
+
+  /* ── 12b. Admin-configurable prices ── */
+  console.log("\n10b. Prices are set in Settings");
+
+  const setPrices = (body: any, token = adminToken) =>
+    call("/admin/settings", { method: "PUT", body }, token);
+
+  const plansNow = async () => (await call("/gyms/plans")).json?.data || [];
+
+  // Production's settings document predates prices; it must still work.
+  await SystemSetting.deleteMany({});
+  await SystemSetting.collection.insertOne({ otpEnabled: true, createdAt: new Date(), updatedAt: new Date() } as any);
+  // Reading through the endpoint refreshes the cache from that document.
+  await call("/admin/settings", { method: "PUT", body: { otpEnabled: true } }, adminToken);
+  const legacyRead = await call("/admin/settings", {}, adminToken);
+  check("a settings doc with no prices still loads", legacyRead.status === 200);
+  check("and reads as the launch prices",
+    legacyRead.json?.plans?.find((p: any) => p.id === "annual")?.price === 999,
+    String(legacyRead.json?.plans?.find((p: any) => p.id === "annual")?.price));
+
+  const defaults = await plansNow();
+  check("default prices served", defaults.find((p: any) => p.id === "annual")?.price === 999,
+    JSON.stringify(defaults.map((p: any) => p.price)));
+
+  const raised = await setPrices({ gymPlanPrices: { monthly: 299, quarterly: 799, annual: 1499 } });
+  check("admin can change prices", raised.status === 200, JSON.stringify(raised.json).slice(0, 140));
+
+  const after = await plansNow();
+  check("new prices are served at once", after.find((p: any) => p.id === "annual")?.price === 1499,
+    JSON.stringify(after.map((p: any) => p.price)));
+  check("per-month is recomputed", after.find((p: any) => p.id === "annual")?.perMonth === 125,
+    String(after.find((p: any) => p.id === "annual")?.perMonth));
+  check("savings recomputed against the new monthly rate",
+    after.find((p: any) => p.id === "annual")?.savingsPercent === 58,
+    String(after.find((p: any) => p.id === "annual")?.savingsPercent));
+
+  const membershipPlans = (await call(`/gyms/${gym.slug}/membership`, {}, gymToken)).json?.plans;
+  check("the gym's own screen shows them too",
+    membershipPlans?.find((p: any) => p.id === "monthly")?.price === 299,
+    String(membershipPlans?.find((p: any) => p.id === "monthly")?.price));
+
+  /* Guards. */
+  const negative = await setPrices({ gymPlanPrices: { monthly: -5 } });
+  check("a negative price is refused", negative.status === 400, `${negative.status}`);
+  const fractional = await setPrices({ gymPlanPrices: { monthly: 199.5 } });
+  check("a fractional price is refused", fractional.status === 400, `${fractional.status}`);
+  const absurd = await setPrices({ gymPlanPrices: { monthly: 9999999 } });
+  check("an absurd price is refused", absurd.status === 400, `${absurd.status}`);
+  const inverted = await setPrices({ gymPlanPrices: { monthly: 999, quarterly: 499, annual: 1499 } });
+  check("a longer term costing less is refused", inverted.status === 400, `${inverted.status}`);
+
+  const stillRight = await plansNow();
+  check("a refused edit changes nothing", stillRight.find((p: any) => p.id === "monthly")?.price === 299,
+    String(stillRight.find((p: any) => p.id === "monthly")?.price));
+
+  const gymEdit = await setPrices({ gymPlanPrices: { monthly: 1 } }, gymToken);
+  check("a gym can't set prices", gymEdit.status === 403, `${gymEdit.status}`);
+  const trainerEdit = await setPrices({ gymPlanPrices: { monthly: 1 } }, verified.token);
+  check("a trainer can't either", trainerEdit.status === 403, `${trainerEdit.status}`);
+
+  /* A price change must not invalidate a payment already quoted. */
+  const quotedAtOldPrice = await sendWebhook({
+    event: "payment.captured",
+    payload: { payment: { entity: {
+      id: "pay_e2e_quoted", order_id: "order_e2e_quoted", amount: 149900,
+      notes: { kind: "gym_membership", gymId: String(gym._id), plan: "annual", amountPaise: "149900" },
+    } } },
+  });
+  check("a payment matching its quote is honoured", quotedAtOldPrice.status === 200);
+  const honoured = (await call(`/gyms/${gym.slug}/membership`, {}, gymToken)).json;
+  check("and the term is written", honoured?.history?.some((h: any) => h.paymentId === "pay_e2e_quoted"));
+  check("at the amount actually charged",
+    honoured?.history?.find((h: any) => h.paymentId === "pay_e2e_quoted")?.amount === 1499,
+    String(honoured?.history?.find((h: any) => h.paymentId === "pay_e2e_quoted")?.amount));
+
+  // Raise the price, then replay a payment quoted at the old one.
+  await setPrices({ gymPlanPrices: { monthly: 399, quarterly: 999, annual: 1999 } });
+  const stale = await sendWebhook({
+    event: "payment.captured",
+    payload: { payment: { entity: {
+      id: "pay_e2e_stale", order_id: "order_e2e_stale", amount: 149900,
+      notes: { kind: "gym_membership", gymId: String(gym._id), plan: "annual", amountPaise: "149900" },
+    } } },
+  });
+  check("a mid-flight quote survives a price rise", stale.status === 200);
+  const afterStale = (await call(`/gyms/${gym.slug}/membership`, {}, gymToken)).json;
+  check("and still buys its term",
+    afterStale?.history?.some((h: any) => h.paymentId === "pay_e2e_stale"),
+    "payment quoted before the rise was rejected");
+
+  // But a payment below its own quote is still an underpay.
+  const short = await sendWebhook({
+    event: "payment.captured",
+    payload: { payment: { entity: {
+      id: "pay_e2e_short", order_id: "order_e2e_short", amount: 10000,
+      notes: { kind: "gym_membership", gymId: String(gym._id), plan: "annual", amountPaise: "199900" },
+    } } },
+  });
+  check("paying under the quote still fails", short.status === 200);
+  const afterShort = (await call(`/gyms/${gym.slug}/membership`, {}, gymToken)).json;
+  check("and buys nothing", !afterShort?.history?.some((h: any) => h.paymentId === "pay_e2e_short"));
+
+  await call("/admin/settings", { method: "PUT", body: { gymPlanPrices: { monthly: 199, quarterly: 499, annual: 999 } } }, adminToken);
 
   /* ── 13. Counts stay private ── */
   console.log("\n11. Candidate counts stay private");

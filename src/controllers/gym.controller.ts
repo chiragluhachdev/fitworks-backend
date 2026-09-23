@@ -4,7 +4,7 @@ import { Job } from "../models/Job";
 import { Application } from "../models/Application";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 import {
-  GYM_PLANS,
+  getPricedPlans,
   getGymSubscriptionState,
   gymVacancyStatus,
   IN_REVIEW_STAGES,
@@ -260,7 +260,7 @@ export const setGymInterest = async (req: Request, res: Response) => {
   }
 };
 
-/** The plan catalogue. Public — the pricing page reads it too. */
+/** The plan catalogue at today's prices. Public — the pricing page reads it. */
 export const getGymPlans = async (_req: Request, res: Response) => {
-  res.status(200).json({ success: true, data: GYM_PLANS });
+  res.status(200).json({ success: true, data: await getPricedPlans() });
 };

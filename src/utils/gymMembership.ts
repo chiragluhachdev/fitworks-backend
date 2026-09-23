@@ -75,6 +75,7 @@ export const applyGymMembership = async (
   gym.subscription.lastPaymentId = paymentId;
   gym.subscription.pendingOrderId = undefined;
   gym.subscription.pendingPlan = undefined;
+  gym.subscription.pendingAmount = undefined;
   gym.subscription.history.push({
     orderId,
     paymentId,

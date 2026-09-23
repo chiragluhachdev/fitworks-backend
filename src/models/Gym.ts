@@ -42,9 +42,11 @@ export interface IGym extends Document {
     expiresAt?: Date;
     /** Rupees charged for the current term. */
     amount?: number;
-    /** The order we are waiting on, and the plan it was raised for. */
+    /** The order we are waiting on, the plan it was raised for, and the
+     *  amount in paise we actually asked for. */
     pendingOrderId?: string;
     pendingPlan?: "monthly" | "quarterly" | "annual";
+    pendingAmount?: number;
     lastOrderId?: string;
     lastPaymentId?: string;
     /** Immutable payment record — every term this gym has bought. */
@@ -140,6 +142,9 @@ const gymSchema = new Schema<IGym>(
         type: String,
         enum: ["monthly", "quarterly", "annual"],
       },
+      // Paise. Prices are editable, so a payment must be checked against what
+      // we quoted at the time — not against whatever the price is now.
+      pendingAmount: { type: Number },
       lastOrderId: { type: String },
       lastPaymentId: { type: String },
       history: [

@@ -1,22 +1,107 @@
 import type { PipelineStage } from "../models/Job";
 import type { CandidateStage } from "../models/Application";
+import { SystemSetting, DEFAULT_GYM_PRICES } from "../models/SystemSetting";
+
+export { DEFAULT_GYM_PRICES };
 
 /**
  * Gym membership plans.
  *
  * Every plan carries the same features — the only thing that changes is how
- * long it runs for, and the rate that falls out of that. Prices are in rupees.
+ * long it runs for, and the rate that falls out of that.
+ *
+ * The shape is fixed in code; the prices are not. An admin sets those in
+ * Settings, and everything that quotes or charges reads them from there. What
+ * is written below is only the fallback for a platform whose settings have
+ * never been saved.
  */
-export const GYM_PLANS = [
-  { id: "monthly", name: "Monthly", price: 199, months: 1 },
-  { id: "quarterly", name: "3 Months", price: 499, months: 3 },
-  { id: "annual", name: "Annual", price: 999, months: 12 },
+const PLAN_SHAPE = [
+  { id: "monthly", name: "FitWorks Monthly", months: 1, cadence: "per month", best: false },
+  { id: "quarterly", name: "FitWorks 3 Months", months: 3, cadence: "per 3 months", best: false },
+  { id: "annual", name: "FitWorks Annual", months: 12, cadence: "per year", best: true },
 ] as const;
 
-export type GymPlanId = (typeof GYM_PLANS)[number]["id"];
+export type GymPlanId = (typeof PLAN_SHAPE)[number]["id"];
 
-export const findPlan = (id: unknown) =>
-  GYM_PLANS.find((p) => p.id === id) ?? null;
+export interface GymPlan {
+  id: GymPlanId;
+  name: string;
+  /** Rupees for the whole term. */
+  price: number;
+  months: number;
+  cadence: string;
+  /** What the term works out to per month, for comparing terms honestly. */
+  perMonth: number;
+  /** Saving against the monthly rate, which is the yardstick by definition. */
+  savingsPercent: number;
+  best: boolean;
+}
+
+export type GymPrices = Record<GymPlanId, number>;
+
+/** Applies prices to the fixed plan shape and derives the comparisons. */
+export const buildGymPlans = (prices: Partial<GymPrices>): GymPlan[] => {
+  const monthlyRate = prices.monthly || DEFAULT_GYM_PRICES.monthly;
+  return PLAN_SHAPE.map((shape) => {
+    const price = prices[shape.id] ?? DEFAULT_GYM_PRICES[shape.id];
+    return {
+      id: shape.id,
+      name: shape.name,
+      months: shape.months,
+      cadence: shape.cadence,
+      best: shape.best,
+      price,
+      perMonth: Math.round(price / shape.months),
+      // A term priced at or above the monthly rate saves nothing — never show
+      // a negative saving.
+      savingsPercent: Math.max(0, Math.round((1 - price / shape.months / monthlyRate) * 100)),
+    };
+  });
+};
+
+/**
+ * The live plans, priced from Settings.
+ *
+ * Cached for a minute: this is read on every checkout, every dashboard load
+ * and every pricing page render, and it changes about once a quarter. Saving
+ * a price clears the cache, so an admin never waits to see their change.
+ */
+let priceCache: { plans: GymPlan[]; at: number } | null = null;
+const PRICE_CACHE_MS = 60_000;
+
+export const clearPlanCache = () => {
+  priceCache = null;
+};
+
+export const getPricedPlans = async (): Promise<GymPlan[]> => {
+  if (priceCache && Date.now() - priceCache.at < PRICE_CACHE_MS) return priceCache.plans;
+
+  let prices: Partial<GymPrices> = {};
+  try {
+    const settings = await SystemSetting.findOne().select("gymPlanPrices").lean();
+    if (settings?.gymPlanPrices) prices = settings.gymPlanPrices;
+  } catch (error) {
+    // Never let a settings read stop someone paying us. Falling back to the
+    // launch prices is wrong by at most one price change; failing is worse.
+    console.error("Plan prices: falling back to defaults —", error);
+  }
+
+  const plans = buildGymPlans(prices);
+  priceCache = { plans, at: Date.now() };
+  return plans;
+};
+
+/** One plan, priced from Settings. Null for an id we don't sell. */
+export const findPricedPlan = async (id: unknown): Promise<GymPlan | null> =>
+  (await getPricedPlans()).find((p) => p.id === id) ?? null;
+
+/**
+ * A plan's identity only — id, name, length. Carries no price.
+ *
+ * Anything involving money must use findPricedPlan instead, so it cannot quote
+ * or charge a number that is no longer what we sell for.
+ */
+export const findPlan = (id: unknown) => PLAN_SHAPE.find((p) => p.id === id) ?? null;
 
 export interface GymSubscriptionState {
   plan: string;
