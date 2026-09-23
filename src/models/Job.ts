@@ -24,7 +24,7 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 export interface IJob extends Document {
   gymId: mongoose.Types.ObjectId;
   position: string;
-  description: string;
+  description?: string;
   requirements: {
     experience: string;
     specialization: string;
@@ -64,7 +64,7 @@ const jobSchema = new Schema<IJob>(
     },
     description: {
       type: String,
-      required: true,
+      default: "",
     },
     requirements: {
       experience: { type: String, required: true },
