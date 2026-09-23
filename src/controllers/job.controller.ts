@@ -197,8 +197,11 @@ export const getJobById = async (req: Request, res: Response) => {
     // Only the gym that owns the vacancy (or an admin) is told how the search
     // is going. Internal notes stay internal either way.
     if (isOwnerOrAdmin(req.user, (job.gymId as any)?._id ?? job.gymId)) {
-      const rows = await Application.find({ jobId: job._id }).select("status");
+      const rows = await Application.find({ jobId: job._id }).populate("trainerId", "personal professional slug profilePhoto");
       data.candidatesInReview = rows.filter((r) => IN_REVIEW_STAGES.includes(r.status)).length;
+      data.finalizedCandidates = rows
+        .filter((r) => ["connected", "hired"].includes(r.status))
+        .map((r) => r.trainerId);
     } else {
       delete data.adminNotes;
     }
