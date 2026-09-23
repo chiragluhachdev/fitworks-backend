@@ -5,7 +5,7 @@ import { Trainer } from "../models/Trainer";
 import { Application } from "../models/Application";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 import { getJobAccess } from "../utils/subscription";
-import { gymVacancyStatus, IN_REVIEW_STAGES, SHARED_WITH_GYM_STAGES } from "../utils/hiring";
+import { gymVacancyStatus, IN_REVIEW_STAGES } from "../utils/hiring";
 
 /** Trims a string field, returning undefined for blanks so they aren't stored. */
 const text = (v: unknown) => {
@@ -147,25 +147,21 @@ export const getJobsByGym = async (req: Request, res: Response) => {
 
     // How the search is going is between us and the gym that asked for it.
     const owner = isOwnerOrAdmin(req.user, targetGymId);
-    const counts = new Map<string, { inReview: number; shared: number }>();
+    const counts = new Map<string, number>();
 
     if (owner) {
       const candidates = await Application.find({ gymId: targetGymId }).select("jobId status");
       for (const c of candidates) {
+        if (!IN_REVIEW_STAGES.includes(c.status)) continue;
         const key = String(c.jobId);
-        const entry = counts.get(key) || { inReview: 0, shared: 0 };
-        if (IN_REVIEW_STAGES.includes(c.status)) entry.inReview++;
-        if (SHARED_WITH_GYM_STAGES.includes(c.status)) entry.shared++;
-        counts.set(key, entry);
+        counts.set(key, (counts.get(key) || 0) + 1);
       }
     }
 
     const data = jobs.map((j) => {
-      const c = counts.get(String(j._id)) || { inReview: 0, shared: 0 };
       const row: any = { ...j.toObject(), gymStatus: gymVacancyStatus(j) };
       if (owner) {
-        row.candidatesInReview = c.inReview;
-        row.candidatesShared = c.shared;
+        row.candidatesInReview = counts.get(String(j._id)) || 0;
       } else {
         delete row.adminNotes;
       }
@@ -196,7 +192,6 @@ export const getJobById = async (req: Request, res: Response) => {
     if (isOwnerOrAdmin(req.user, (job.gymId as any)?._id ?? job.gymId)) {
       const rows = await Application.find({ jobId: job._id }).select("status");
       data.candidatesInReview = rows.filter((r) => IN_REVIEW_STAGES.includes(r.status)).length;
-      data.candidatesShared = rows.filter((r) => SHARED_WITH_GYM_STAGES.includes(r.status)).length;
     } else {
       delete data.adminNotes;
     }

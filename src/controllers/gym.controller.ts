@@ -8,7 +8,6 @@ import {
   getGymSubscriptionState,
   gymVacancyStatus,
   IN_REVIEW_STAGES,
-  SHARED_WITH_GYM_STAGES,
 } from "../utils/hiring";
 
 /**
@@ -118,24 +117,18 @@ export const getGymDashboardStats = async (req: Request, res: Response) => {
 
     const candidates = await Application.find({ gymId: gym._id }).select("jobId status");
 
-    const perJob = new Map<string, { inReview: number; shared: number }>();
+    const perJob = new Map<string, number>();
     for (const c of candidates) {
+      if (!IN_REVIEW_STAGES.includes(c.status)) continue;
       const key = String(c.jobId);
-      const entry = perJob.get(key) || { inReview: 0, shared: 0 };
-      if (IN_REVIEW_STAGES.includes(c.status)) entry.inReview++;
-      if (SHARED_WITH_GYM_STAGES.includes(c.status)) entry.shared++;
-      perJob.set(key, entry);
+      perJob.set(key, (perJob.get(key) || 0) + 1);
     }
 
-    const withCounts = jobs.map((j) => {
-      const counts = perJob.get(String(j._id)) || { inReview: 0, shared: 0 };
-      return {
-        ...j.toObject(),
-        gymStatus: gymVacancyStatus(j),
-        candidatesInReview: counts.inReview,
-        candidatesShared: counts.shared,
-      };
-    });
+    const withCounts = jobs.map((j) => ({
+      ...j.toObject(),
+      gymStatus: gymVacancyStatus(j),
+      candidatesInReview: perJob.get(String(j._id)) || 0,
+    }));
 
     const open = withCounts.filter((j) => j.gymStatus === "active" || j.gymStatus === "under_review");
 
@@ -149,7 +142,6 @@ export const getGymDashboardStats = async (req: Request, res: Response) => {
           totalVacancies: jobs.length,
           activeVacancies: open.length,
           trainersInReview: candidates.filter((c) => IN_REVIEW_STAGES.includes(c.status)).length,
-          trainersShared: candidates.filter((c) => SHARED_WITH_GYM_STAGES.includes(c.status)).length,
           filled: jobs.filter((j) => j.pipelineStatus === "filled").length,
         },
         vacancies: withCounts,
@@ -158,104 +150,6 @@ export const getGymDashboardStats = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error("Get Gym Dashboard Stats Error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-/**
- * Trainers the FitWorks team has put forward to this gym.
- *
- * Only rows we have actually shared are returned, and only the fields a gym
- * needs to judge a fit. A phone number or an email address is never included —
- * the introduction is made by our team, not by the gym reaching out cold.
- */
-export const getGymRecommendations = async (req: Request, res: Response) => {
-  try {
-    const gym = await Gym.findOne({ slug: req.params.slug });
-    if (!gym) {
-      return res.status(404).json({ success: false, message: "Gym not found" });
-    }
-    if (!isOwnerOrAdmin(req.user, gym._id)) {
-      return res.status(403).json({ success: false, message: "Not authorized to view this gym" });
-    }
-
-    const rows = await Application.find({
-      gymId: gym._id,
-      status: { $in: SHARED_WITH_GYM_STAGES },
-    })
-      .sort({ sharedAt: -1, updatedAt: -1 })
-      .populate("jobId", "position location requirements")
-      .populate(
-        "trainerId",
-        "personal.fullName personal.city personal.location personal.profilePhoto professional verificationStatus slug"
-      );
-
-    // Strip anything the gym shouldn't see, including our internal notes.
-    const data = rows
-      .filter((r) => r.trainerId)
-      .map((r) => {
-        const t: any = r.trainerId;
-        return {
-          _id: r._id,
-          status: r.status,
-          gymInterest: r.gymInterest,
-          sharedAt: r.sharedAt,
-          vacancy: r.jobId,
-          trainer: {
-            fullName: t.personal?.fullName,
-            city: t.personal?.city,
-            location: t.personal?.location,
-            profilePhoto: t.personal?.profilePhoto,
-            verificationStatus: t.verificationStatus,
-            professionalTitle: t.professional?.professionalTitle,
-            yearsOfExperience: t.professional?.yearsOfExperience,
-            specializations: t.professional?.specializations || [],
-            skills: t.professional?.skills || [],
-            certifications: (t.professional?.certifications || []).map((c: any) => c.name),
-            education: t.professional?.education,
-            bio: t.professional?.bio,
-          },
-        };
-      });
-
-    res.status(200).json({ success: true, count: data.length, data });
-  } catch (error: any) {
-    console.error("Get Gym Recommendations Error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-/**
- * The gym's reply to a trainer we put forward.
- *
- * It records interest and nothing more — our team still makes the introduction,
- * so this never exposes the trainer's contact details.
- */
-export const setGymInterest = async (req: Request, res: Response) => {
-  try {
-    const { interest } = req.body;
-    if (!["none", "interested", "contact_requested"].includes(interest)) {
-      return res.status(400).json({ success: false, message: "Invalid response" });
-    }
-
-    const row = await Application.findById(req.params.id);
-    if (!row) {
-      return res.status(404).json({ success: false, message: "Recommendation not found" });
-    }
-    if (!isOwnerOrAdmin(req.user, row.gymId)) {
-      return res.status(403).json({ success: false, message: "Not authorized" });
-    }
-    // A gym can only respond to someone we have actually shown them.
-    if (!SHARED_WITH_GYM_STAGES.includes(row.status)) {
-      return res.status(403).json({ success: false, message: "This trainer hasn't been shared with you yet" });
-    }
-
-    row.gymInterest = interest;
-    await row.save();
-
-    res.status(200).json({ success: true, data: { _id: row._id, gymInterest: row.gymInterest } });
-  } catch (error: any) {
-    console.error("Set Gym Interest Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };

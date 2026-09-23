@@ -34,8 +34,6 @@ export interface IApplication extends Document {
   coverLetter?: string;
   /** Internal — never returned to a gym or a trainer. */
   adminNotes?: string;
-  /** What the gym said once the team shared this trainer with them. */
-  gymInterest: "none" | "interested" | "contact_requested";
   contactedAt?: Date;
   sharedAt?: Date;
   appliedAt: Date;
@@ -75,11 +73,6 @@ const applicationSchema = new Schema<IApplication>(
     },
     adminNotes: {
       type: String,
-    },
-    gymInterest: {
-      type: String,
-      enum: ["none", "interested", "contact_requested"],
-      default: "none",
     },
     contactedAt: { type: Date },
     sharedAt: { type: Date },

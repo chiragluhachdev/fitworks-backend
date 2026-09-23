@@ -189,45 +189,48 @@ async function main() {
   const searchAgain = await call(`/admin/hiring/trainer-search?jobId=${jobId}`, {}, adminToken);
   check("an already-shortlisted trainer drops out of the picker", !searchAgain.json?.data?.some((t: any) => t.slug === "e2e-trainer-1"));
 
-  /* ── 7. Nothing reaches the gym before it's shared ── */
-  console.log("\n5. Nothing reaches the gym before it is shared");
-  const early = await call(`/gyms/${gym.slug}/recommendations`, {}, gymToken);
-  check("recommendations still empty", early.json?.data?.length === 0, `${early.json?.data?.length}`);
+  /* ── 7. The gym sees progress, never the candidates ── */
+  console.log("\n5. The gym sees progress, never the candidates");
   const midDash = await call(`/gyms/${gym.slug}/dashboard`, {}, gymToken);
-  check("gym sees 1 trainer in review", midDash.json?.data?.stats?.trainersInReview === 1, String(midDash.json?.data?.stats?.trainersInReview));
-  check("gym sees 0 shared", midDash.json?.data?.stats?.trainersShared === 0);
+  check("gym sees 1 trainer in review", midDash.json?.data?.stats?.trainersInReview === 1,
+    String(midDash.json?.data?.stats?.trainersInReview));
+  check("no shared count is published", midDash.json?.data?.stats?.trainersShared === undefined);
 
-  const earlyInterest = await call(`/gyms/recommendations/${rowId}/interest`, { method: "PUT", body: { interest: "interested" } }, gymToken);
-  check("gym can't respond to an unshared trainer", earlyInterest.status === 403, `${earlyInterest.status}`);
+  const gone = await call(`/gyms/${gym.slug}/recommendations`, {}, gymToken);
+  check("the recommendations endpoint is gone", gone.status === 404, `${gone.status}`);
+  const goneInterest = await call(`/gyms/recommendations/${rowId}/interest`,
+    { method: "PUT", body: { interest: "interested" } }, gymToken);
+  check("so is the interest endpoint", goneInterest.status === 404, `${goneInterest.status}`);
 
-  /* ── 8. Admin contacts and shares ── */
+  const ownerList = await call(`/jobs/gym/slug/${gym.slug}`, {}, gymToken);
+  check("the vacancy list carries only the review count",
+    ownerList.json?.data?.[0]?.candidatesInReview === 1,
+    String(ownerList.json?.data?.[0]?.candidatesInReview));
+  check("and no shared count", ownerList.json?.data?.[0]?.candidatesShared === undefined);
+
+  /* ── 8. Admin contacts, then shares ── */
   console.log("\n6. Admin contacts, then shares");
-  const contacted = await call(`/admin/hiring/shortlist/${rowId}`, { method: "PATCH", body: { status: "contacted" } }, adminToken);
+  const contacted = await call(`/admin/hiring/shortlist/${rowId}`,
+    { method: "PATCH", body: { status: "contacted" } }, adminToken);
   check("marked contacted", contacted.json?.data?.status === "contacted");
   check("contactedAt recorded", !!contacted.json?.data?.contactedAt);
 
-  const shared = await call(`/admin/hiring/shortlist/${rowId}`, { method: "PATCH", body: { status: "shared" } }, adminToken);
+  const shared = await call(`/admin/hiring/shortlist/${rowId}`,
+    { method: "PATCH", body: { status: "shared" } }, adminToken);
   check("marked shared", shared.json?.data?.status === "shared");
   check("sharedAt recorded", !!shared.json?.data?.sharedAt);
 
   const afterShare = await call(`/admin/hiring/vacancies/${jobId}`, {}, adminToken);
-  check("vacancy moved to 'gym_contacted'", afterShare.json?.data?.vacancy?.pipelineStatus === "gym_contacted", afterShare.json?.data?.vacancy?.pipelineStatus);
+  check("vacancy moved to 'gym_contacted'",
+    afterShare.json?.data?.vacancy?.pipelineStatus === "gym_contacted",
+    afterShare.json?.data?.vacancy?.pipelineStatus);
 
-  /* ── 9. Gym now sees it, without contact details ── */
-  console.log("\n7. Gym sees the recommendation");
-  const recs = await call(`/gyms/${gym.slug}/recommendations`, {}, gymToken);
-  check("one recommendation returned", recs.json?.data?.length === 1, `${recs.json?.data?.length}`);
-  const rec = recs.json?.data?.[0];
-  check("trainer name present", rec?.trainer?.fullName === "E2E Trainer 1");
-  check("phone NOT exposed", !JSON.stringify(rec).includes("9000000101"), "phone leaked to gym");
-  check("email NOT exposed", !JSON.stringify(rec).toLowerCase().includes("trainer1@e2e.local"), "email leaked to gym");
-  check("internal notes NOT exposed", !("adminNotes" in (rec || {})), "adminNotes leaked");
-
-  const interest = await call(`/gyms/recommendations/${rowId}/interest`, { method: "PUT", body: { interest: "contact_requested" } }, gymToken);
-  check("gym can request contact", interest.status === 200 && interest.json?.data?.gymInterest === "contact_requested");
-
-  const otherInterest = await call(`/gyms/recommendations/${rowId}/interest`, { method: "PUT", body: { interest: "interested" } }, otherToken);
-  check("another gym can't answer for this one", otherInterest.status === 403, `${otherInterest.status}`);
+  /* ── 9. The trainer's details never reach the gym ── */
+  console.log("\n7. The trainer's details never reach the gym");
+  const gymViewOfJob = JSON.stringify((await call(`/jobs/${jobId}`, {}, gymToken)).json);
+  check("no trainer phone in the gym's view", !gymViewOfJob.includes("9000000101"), "phone leaked");
+  check("no trainer email either", !gymViewOfJob.toLowerCase().includes("trainer1@e2e.local"), "email leaked");
+  check("and no internal notes", !gymViewOfJob.includes("adminNotes"), "adminNotes leaked");
 
   /* ── 10. Hiring closes the role ── */
   console.log("\n8. Hiring closes the role");
@@ -510,9 +513,10 @@ async function main() {
   const anon = await call(`/jobs/gym/slug/${gym.slug}`);
   check("anonymous list has no candidate counts", anon.json?.data?.[0]?.candidatesInReview === undefined);
   const owner = await call(`/jobs/gym/slug/${gym.slug}`, {}, gymToken);
-  check("the owner's list does", owner.json?.data?.[0]?.candidatesShared === 1, String(owner.json?.data?.[0]?.candidatesShared));
+  check("the owner's list does", owner.json?.data?.[0]?.candidatesInReview !== undefined,
+    JSON.stringify(owner.json?.data?.[0]?.candidatesInReview));
   const anonDetail = await call(`/jobs/${jobId}`);
-  check("anonymous detail has no counts", anonDetail.json?.data?.candidatesShared === undefined);
+  check("anonymous detail has no counts", anonDetail.json?.data?.candidatesInReview === undefined);
   check("anonymous detail has no internal notes", anonDetail.json?.data?.adminNotes === undefined);
 
   const anonGym = await call(`/gyms/${gym.slug}`);

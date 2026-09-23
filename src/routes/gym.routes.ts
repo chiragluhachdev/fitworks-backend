@@ -3,8 +3,6 @@ import {
   getGymBySlug,
   updateGymProfile,
   getGymDashboardStats,
-  getGymRecommendations,
-  setGymInterest,
   getGymPlans,
 } from "../controllers/gym.controller";
 import {
@@ -21,15 +19,11 @@ router.get("/plans", getGymPlans);
 
 router.get("/:slug", optionalAuth, getGymBySlug);
 router.get("/:slug/dashboard", protect, getGymDashboardStats);
-router.get("/:slug/recommendations", protect, getGymRecommendations);
 router.put("/:slug/profile", protect, authorize("gym", "admin"), updateGymProfile);
 
 // Membership: Razorpay checkout, raised and verified server-side.
 router.get("/:slug/membership", protect, getGymMembership);
 router.post("/:slug/membership/order", protect, authorize("gym", "admin"), createGymOrder);
 router.post("/:slug/membership/verify", protect, authorize("gym", "admin"), verifyGymPayment);
-
-// A gym's reply to a trainer our team put forward.
-router.put("/recommendations/:id/interest", protect, authorize("gym", "admin"), setGymInterest);
 
 export default router;
