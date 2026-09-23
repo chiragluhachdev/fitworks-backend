@@ -4,6 +4,8 @@ export interface IGym extends Document {
   userId: mongoose.Types.ObjectId; // References User
   gymName: string;
   gymLogo?: string;
+  /** Wide banner shown across the top of the gym profile. */
+  coverImage?: string;
   gymDescription: string;
   address: {
     street: string;
@@ -14,6 +16,10 @@ export interface IGym extends Document {
   website?: string;
   instagram?: string;
   numberOfLocations: number;
+  /** Equipment and amenities — what a trainer would want to know. */
+  facilities: string[];
+  /** The kinds of training this gym runs. */
+  specializations: string[];
   hiringInformation: {
     trainersRequired: number;
     trainerTypes: string[];
@@ -25,6 +31,18 @@ export interface IGym extends Document {
     name: string;
     designation: string;
     phone: string;
+    email?: string;
+  };
+  subscription: {
+    plan: "none" | "monthly" | "quarterly" | "annual";
+    status: "inactive" | "active" | "expired";
+    startedAt?: Date;
+    expiresAt?: Date;
+    /** Rupees charged for the current term. */
+    amount?: number;
+    /** A plan the gym asked for; the team activates it by hand. */
+    requestedPlan?: "monthly" | "quarterly" | "annual";
+    requestedAt?: Date;
   };
   slug: string;
   createdAt: Date;
@@ -48,6 +66,10 @@ const gymSchema = new Schema<IGym>(
       type: String,
       default: "",
     },
+    coverImage: {
+      type: String,
+      default: "",
+    },
     gymDescription: {
       type: String,
       required: true,
@@ -65,6 +87,8 @@ const gymSchema = new Schema<IGym>(
       required: true,
       default: 1,
     },
+    facilities: [{ type: String, trim: true }],
+    specializations: [{ type: String, trim: true }],
     hiringInformation: {
       trainersRequired: { type: Number, required: true },
       trainerTypes: [{ type: String }],
@@ -76,6 +100,29 @@ const gymSchema = new Schema<IGym>(
       name: { type: String, required: true },
       designation: { type: String, required: true },
       phone: { type: String, required: true },
+      email: { type: String, lowercase: true, trim: true },
+    },
+    // Gyms that signed up before plans existed read as inactive, which is
+    // correct — nobody has been charged.
+    subscription: {
+      plan: {
+        type: String,
+        enum: ["none", "monthly", "quarterly", "annual"],
+        default: "none",
+      },
+      status: {
+        type: String,
+        enum: ["inactive", "active", "expired"],
+        default: "inactive",
+      },
+      startedAt: { type: Date },
+      expiresAt: { type: Date },
+      amount: { type: Number },
+      requestedPlan: {
+        type: String,
+        enum: ["monthly", "quarterly", "annual"],
+      },
+      requestedAt: { type: Date },
     },
     slug: {
       type: String,

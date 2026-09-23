@@ -103,6 +103,32 @@ export const submitVerificationDocuments = async (req: Request, res: Response) =
   }
 };
 
+/**
+ * How complete a trainer's profile is.
+ *
+ * FitWorks matches trainers to gym requirements by hand, so the fields that
+ * count here are the ones our team searches on — a profile with no
+ * specializations or no stated salary expectation is one we cannot place.
+ */
+const profileCompletion = (t: any) => {
+  const checks: { label: string; done: boolean; weight: number }[] = [
+    { label: "Profile photo", done: !!t.personal?.profilePhoto, weight: 10 },
+    { label: "City and area", done: !!t.personal?.city && !!t.personal?.location, weight: 10 },
+    { label: "Professional title", done: !!t.professional?.professionalTitle, weight: 10 },
+    { label: "Specializations", done: (t.professional?.specializations || []).length > 0, weight: 15 },
+    { label: "Skills", done: (t.professional?.skills || []).length > 0, weight: 10 },
+    { label: "About you", done: (t.professional?.bio || "").length >= 40, weight: 15 },
+    { label: "Education", done: !!t.professional?.education, weight: 5 },
+    { label: "Certificates", done: (t.professional?.certifications || []).length > 0, weight: 5 },
+    { label: "Salary expectation", done: !!t.workPreferences?.expectedMonthlySalary, weight: 5 },
+    { label: "Preferred locations", done: (t.workPreferences?.preferredLocations || []).length > 0, weight: 5 },
+    { label: "Verification documents", done: (t.verificationDocuments || []).length > 0, weight: 10 },
+  ];
+
+  const percent = checks.reduce((sum, c) => sum + (c.done ? c.weight : 0), 0);
+  return { percent, missing: checks.filter((c) => !c.done).map((c) => c.label) };
+};
+
 export const getTrainerDashboardStats = async (req: Request, res: Response) => {
   try {
     const trainer = await Trainer.findOne({ slug: req.params.slug });
@@ -125,12 +151,13 @@ export const getTrainerDashboardStats = async (req: Request, res: Response) => {
     // endpoint, so the dashboard can never dangle a job the trainer can't act on.
     const jobAccess = getJobAccess(trainer);
     const recommendedJobs = jobAccess.allowed
-      ? await Job.find({ status: "open" })
-          .limit(4)
+      ? await Job.find({ status: "open", pipelineStatus: { $ne: "filled" } })
+          .limit(6)
           .populate("gymId", "gymName gymLogo address slug")
       : [];
 
     const activation = getActivationState(trainer.subscription);
+    const completion = profileCompletion(trainer);
 
     res.status(200).json({
       success: true,
@@ -138,12 +165,17 @@ export const getTrainerDashboardStats = async (req: Request, res: Response) => {
         trainer,
         activation,
         jobAccess,
+        completion,
         stats: {
-          activeApplications: applications.length,
-          newConnections: connections.filter(c => c.status === "pending").length,
+          openOpportunities: recommendedJobs.length,
+          introductions: connections.length,
+          newConnections: connections.filter((c) => c.status === "pending").length,
           verificationStatus: trainer.verificationStatus,
+          profileCompletion: completion.percent,
           // Verification is the gate: approved means active, nothing else does.
           accountActive: trainer.verificationStatus === "verified",
+          // Kept for anything still reading the old field name.
+          activeApplications: applications.length,
         },
         applications,
         connections,

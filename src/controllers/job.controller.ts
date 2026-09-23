@@ -5,20 +5,31 @@ import { Trainer } from "../models/Trainer";
 import { Application } from "../models/Application";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
 import { getJobAccess } from "../utils/subscription";
+import { gymVacancyStatus, IN_REVIEW_STAGES, SHARED_WITH_GYM_STAGES } from "../utils/hiring";
+
+/** Trims a string field, returning undefined for blanks so they aren't stored. */
+const text = (v: unknown) => {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s || undefined;
+};
 
 export const createJob = async (req: Request, res: Response) => {
   try {
-    const { 
+    const {
       gymSlug,
       gymId,
-      position, 
-      description, 
-      requirements, 
-      salaryRange, 
-      employmentType, 
-      location, 
-      numberOfOpenings, 
-      applicationDeadline 
+      position,
+      description,
+      requirements,
+      salaryRange,
+      employmentType,
+      location,
+      branchName,
+      workingHours,
+      requirementsText,
+      additionalInfo,
+      numberOfOpenings,
+      applicationDeadline,
     } = req.body;
 
     let targetGymId = gymId;
@@ -44,13 +55,23 @@ export const createJob = async (req: Request, res: Response) => {
       gymId: targetGymId,
       position,
       description,
-      requirements: requirements || { experience: "1-3 Years", specialization: "General Fitness" },
+      requirements: {
+        experience: requirements?.experience || "1-3 Years",
+        specialization: requirements?.specialization || "General Fitness",
+        trainerType: text(requirements?.trainerType),
+      },
       salaryRange,
       employmentType,
       location,
+      branchName: text(branchName),
+      workingHours: text(workingHours),
+      requirementsText: text(requirementsText),
+      additionalInfo: text(additionalInfo),
       numberOfOpenings: Number(numberOfOpenings) || 1,
-      applicationDeadline: applicationDeadline || new Date(Date.now() + 30 * 86400000),
+      applicationDeadline: applicationDeadline || undefined,
       status: "open",
+      // Every new requirement lands in the team's queue.
+      pipelineStatus: "new",
     });
 
     res.status(201).json({ success: true, data: job });
@@ -62,8 +83,8 @@ export const createJob = async (req: Request, res: Response) => {
 
 export const getJobs = async (req: Request, res: Response) => {
   try {
-    // A signed-in trainer must be approved and on an active membership before
-    // vacancies are returned. Gyms and admins are unaffected.
+    // A signed-in trainer must be approved before vacancies are returned.
+    // Gyms and admins are unaffected.
     if (req.user?.role === "trainer") {
       const trainer = await Trainer.findById(req.user.profileId).select(
         "verificationStatus subscription"
@@ -89,6 +110,9 @@ export const getJobs = async (req: Request, res: Response) => {
     if (location) query.location = { $regex: location, $options: "i" };
     if (type) query.employmentType = { $regex: type, $options: "i" };
 
+    // A role the team has already filled isn't an opportunity any more.
+    query.pipelineStatus = { $ne: "filled" };
+
     const jobs = await Job.find(query)
       .sort({ createdAt: -1 })
       .populate("gymId", "gymName gymLogo address city slug website instagram gymDescription numberOfLocations");
@@ -100,6 +124,12 @@ export const getJobs = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * A gym's own vacancies, each with how many trainers we're working on for it.
+ *
+ * The counts are the point of the screen: they are the only signal a gym gets
+ * that its requirement is moving.
+ */
 export const getJobsByGym = async (req: Request, res: Response) => {
   try {
     const { gymSlug, gymId } = req.params;
@@ -114,7 +144,35 @@ export const getJobsByGym = async (req: Request, res: Response) => {
     }
 
     const jobs = await Job.find({ gymId: targetGymId }).sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: jobs });
+
+    // How the search is going is between us and the gym that asked for it.
+    const owner = isOwnerOrAdmin(req.user, targetGymId);
+    const counts = new Map<string, { inReview: number; shared: number }>();
+
+    if (owner) {
+      const candidates = await Application.find({ gymId: targetGymId }).select("jobId status");
+      for (const c of candidates) {
+        const key = String(c.jobId);
+        const entry = counts.get(key) || { inReview: 0, shared: 0 };
+        if (IN_REVIEW_STAGES.includes(c.status)) entry.inReview++;
+        if (SHARED_WITH_GYM_STAGES.includes(c.status)) entry.shared++;
+        counts.set(key, entry);
+      }
+    }
+
+    const data = jobs.map((j) => {
+      const c = counts.get(String(j._id)) || { inReview: 0, shared: 0 };
+      const row: any = { ...j.toObject(), gymStatus: gymVacancyStatus(j) };
+      if (owner) {
+        row.candidatesInReview = c.inReview;
+        row.candidatesShared = c.shared;
+      } else {
+        delete row.adminNotes;
+      }
+      return row;
+    });
+
+    res.status(200).json({ success: true, data });
   } catch (error: any) {
     console.error("Get Jobs By Gym Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -123,11 +181,27 @@ export const getJobsByGym = async (req: Request, res: Response) => {
 
 export const getJobById = async (req: Request, res: Response) => {
   try {
-    const job = await Job.findById(req.params.id).populate("gymId", "gymName gymLogo gymDescription address slug contactPerson");
+    const job = await Job.findById(req.params.id).populate(
+      "gymId",
+      "gymName gymLogo gymDescription address slug contactPerson"
+    );
     if (!job) {
       return res.status(404).json({ success: false, message: "Job not found" });
     }
-    res.status(200).json({ success: true, data: job });
+
+    const data: any = { ...job.toObject(), gymStatus: gymVacancyStatus(job) };
+
+    // Only the gym that owns the vacancy (or an admin) is told how the search
+    // is going. Internal notes stay internal either way.
+    if (isOwnerOrAdmin(req.user, (job.gymId as any)?._id ?? job.gymId)) {
+      const rows = await Application.find({ jobId: job._id }).select("status");
+      data.candidatesInReview = rows.filter((r) => IN_REVIEW_STAGES.includes(r.status)).length;
+      data.candidatesShared = rows.filter((r) => SHARED_WITH_GYM_STAGES.includes(r.status)).length;
+    } else {
+      delete data.adminNotes;
+    }
+
+    res.status(200).json({ success: true, data });
   } catch (error: any) {
     console.error("Get Job Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -144,10 +218,19 @@ export const updateJob = async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, message: "Not authorized to edit this vacancy" });
     }
 
-    // gymId is never reassignable through this route.
-    const { gymId: _ignored, ...updates } = req.body ?? {};
-    const job = await Job.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true, runValidators: true });
-    res.status(200).json({ success: true, data: job });
+    // gymId is never reassignable here, and the working stage belongs to the
+    // team — a gym closing a role must not rewrite where our search had got to.
+    const { gymId: _gym, pipelineStatus: _stage, adminNotes: _notes, ...updates } = req.body ?? {};
+    if (req.user?.role === "admin" && req.body?.pipelineStatus) {
+      (updates as any).pipelineStatus = req.body.pipelineStatus;
+    }
+
+    const job = await Job.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+    res.status(200).json({ success: true, data: { ...job!.toObject(), gymStatus: gymVacancyStatus(job!) } });
   } catch (error: any) {
     console.error("Update Job Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -165,8 +248,8 @@ export const deleteJob = async (req: Request, res: Response) => {
     }
 
     await Job.findByIdAndDelete(req.params.id);
-    // Applications pointing at a deleted vacancy would render as blank rows in
-    // both dashboards, so they go with it.
+    // Candidate rows pointing at a deleted vacancy would render as blank rows
+    // in the admin board, so they go with it.
     await Application.deleteMany({ jobId: job._id });
 
     res.status(200).json({ success: true, message: "Vacancy removed successfully" });

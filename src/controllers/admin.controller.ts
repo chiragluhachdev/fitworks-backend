@@ -7,6 +7,7 @@ import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
 import { SystemSetting } from "../models/SystemSetting";
 import { getActivationState, activatedTrainerFilter, ACTIVATION_AMOUNT_PAISE } from "../utils/subscription";
+import { getGymSubscriptionState, gymVacancyStatus, IN_REVIEW_STAGES } from "../utils/hiring";
 
 export const getDashboardStats = async (req: Request, res: Response) => {
   try {
@@ -19,6 +20,15 @@ export const getDashboardStats = async (req: Request, res: Response) => {
     const totalApplications = await Application.countDocuments();
     const hiredTrainers = await Application.countDocuments({ status: "hired" });
     const pendingConnections = await Connection.countDocuments({ status: "pending" });
+    // The hiring queue: what the team has to act on today.
+    const newRequirements = await Job.countDocuments({ pipelineStatus: { $in: ["new", "under_review"] } });
+    const inProgress = await Job.countDocuments({
+      pipelineStatus: { $in: ["finding_trainers", "trainers_shortlisted", "gym_contacted", "connecting"] },
+    });
+    const filledVacancies = await Job.countDocuments({ pipelineStatus: "filled" });
+    const trainersInReview = await Application.countDocuments({ status: { $in: IN_REVIEW_STAGES } });
+    const payingGyms = await Gym.countDocuments({ "subscription.status": "active" });
+    const planRequests = await Gym.countDocuments({ "subscription.requestedPlan": { $ne: null } });
     const activeMembers = await Trainer.countDocuments(activatedTrainerFilter());
     const lapsedMembers = totalTrainers - activeMembers;
 
@@ -36,6 +46,12 @@ export const getDashboardStats = async (req: Request, res: Response) => {
         pendingConnections,
         activeMembers,
         lapsedMembers,
+        newRequirements,
+        inProgress,
+        filledVacancies,
+        trainersInReview,
+        payingGyms,
+        planRequests,
       }
     });
   } catch (error: any) {
@@ -77,7 +93,13 @@ export const getTrainers = async (req: Request, res: Response) => {
 export const getGyms = async (req: Request, res: Response) => {
   try {
     const gyms = await Gym.find().sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: gyms });
+    // Membership is derived, never trusted from the stored status alone — a
+    // term that lapsed since the last login must not read as active.
+    const data = gyms.map((g) => ({
+      ...g.toObject(),
+      subscriptionState: getGymSubscriptionState(g.subscription),
+    }));
+    res.status(200).json({ success: true, data });
   } catch (error: any) {
     res.status(500).json({ success: false, message: "Server error" });
   }
@@ -88,7 +110,8 @@ export const getVacancies = async (req: Request, res: Response) => {
     const jobs = await Job.find()
       .populate("gymId", "gymName gymLogo address city slug location website instagram numberOfLocations")
       .sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: jobs });
+    const data = jobs.map((j) => ({ ...j.toObject(), gymStatus: gymVacancyStatus(j) }));
+    res.status(200).json({ success: true, data });
   } catch (error: any) {
     res.status(500).json({ success: false, message: "Server error" });
   }

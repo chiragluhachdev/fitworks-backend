@@ -1,51 +1,23 @@
 import { Request, Response } from "express";
 import { Application } from "../models/Application";
-import { Job } from "../models/Job";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
-import { Trainer } from "../models/Trainer";
-import { getJobAccess } from "../utils/subscription";
 
-export const applyForJob = async (req: Request, res: Response) => {
-  try {
-    if (req.user?.role !== "trainer") {
-      return res.status(403).json({ success: false, message: "Only trainers can apply for jobs" });
-    }
-
-    const { jobId, coverLetter } = req.body;
-    const trainerId = req.user.profileId;
-
-    const trainer = await Trainer.findById(trainerId).select("verificationStatus subscription");
-    const access = getJobAccess(trainer);
-    if (!access.allowed) {
-      return res.status(403).json({
-        success: false,
-        locked: true,
-        reason: access.reason,
-        title: access.title,
-        message: access.message,
-      });
-    }
-
-    const job = await Job.findById(jobId);
-    if (!job) {
-      return res.status(404).json({ success: false, message: "Job not found" });
-    }
-
-    const application = await Application.create({
-      jobId,
-      trainerId,
-      gymId: job.gymId,
-      coverLetter,
-    });
-
-    res.status(201).json({ success: true, data: application });
-  } catch (error: any) {
-    if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: "You have already applied for this job" });
-    }
-    console.error("Apply Job Error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
+/**
+ * Retired: trainers no longer apply to vacancies themselves.
+ *
+ * FitWorks introduces trainers to gyms, so a candidate row is created by the
+ * team rather than by the trainer. The route is kept and answers plainly so an
+ * old cached page gets an explanation instead of a silent failure.
+ */
+export const applyForJob = async (_req: Request, res: Response) => {
+  return res.status(403).json({
+    success: false,
+    locked: true,
+    reason: "handled_by_fitworks",
+    title: "FitWorks handles introductions",
+    message:
+      "You don't need to apply. Keep your profile complete and verified — our team matches trainers to gym requirements and gets in touch when something suits you.",
+  });
 };
 
 export const getTrainerApplications = async (req: Request, res: Response) => {

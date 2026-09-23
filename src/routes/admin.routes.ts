@@ -17,6 +17,16 @@ import {
   updateSettings,
 } from "../controllers/admin.controller";
 import {
+  getVacancyBoard,
+  getVacancyDetail,
+  updateVacancyStage,
+  searchTrainersForVacancy,
+  shortlistTrainer,
+  updateShortlistEntry,
+  removeShortlistEntry,
+  updateGymSubscription,
+} from "../controllers/hiring.controller";
+import {
   getInstantLeads,
   importInstantLeads,
   updateInstantLead,
@@ -43,8 +53,19 @@ router.get("/connections", getConnections);
 router.get("/subscriptions", getSubscriptions);
 router.get("/trainers/:id", getTrainerDetail);
 
+// ── Hiring workflow: post vacancy -> review -> shortlist -> connect ──
+// Static segments come before "/vacancies/:id" so they aren't read as an id.
+router.get("/hiring/trainer-search", searchTrainersForVacancy);
+router.get("/hiring/vacancies", getVacancyBoard);
+router.get("/hiring/vacancies/:id", getVacancyDetail);
+router.put("/hiring/vacancies/:id/stage", updateVacancyStage);
+router.post("/hiring/vacancies/:id/shortlist", shortlistTrainer);
+router.patch("/hiring/shortlist/:id", updateShortlistEntry);
+router.delete("/hiring/shortlist/:id", removeShortlistEntry);
+
 // Gym actions
 router.put("/gyms/:id", updateGym);
+router.put("/gyms/:id/subscription", updateGymSubscription);
 router.delete("/gyms/:id", deleteGym);
 
 // Verification actions
