@@ -7,6 +7,7 @@ import { Application } from "../models/Application";
 import { Connection } from "../models/Connection";
 import { SystemSetting } from "../models/SystemSetting";
 import { getActivationState, activatedTrainerFilter, ACTIVATION_AMOUNT_PAISE } from "../utils/subscription";
+import { canonicalLocation, buildLocationIndex } from "../utils/locations";
 import {
   getGymSubscriptionState,
   gymVacancyStatus,
@@ -87,6 +88,10 @@ export const getTrainers = async (req: Request, res: Response) => {
     // Attach derived membership status so admin can see who has lapsed, plus the
     // combined answer to "is this trainer actually live on the platform?" —
     // approved by an admin AND currently paid up.
+    //
+    // City is free text, so it is also resolved to a canonical city and state
+    // here rather than in the browser: the filter has to agree with itself
+    // across pages, and five spellings of Bengaluru must count as one place.
     const data = trainers.map((t) => {
       const activation = getActivationState(t.subscription);
       return {
@@ -94,9 +99,17 @@ export const getTrainers = async (req: Request, res: Response) => {
         activation,
         accountActive: t.verificationStatus === "verified",
         totalPaid: activation.totalPaid,
+        location: canonicalLocation(t.personal?.city),
       };
     });
-    res.status(200).json({ success: true, data });
+
+    res.status(200).json({
+      success: true,
+      data,
+      // The state/city tree the filter renders from, with counts, so the UI
+      // never has to derive its own options from the rows.
+      locations: buildLocationIndex(data.map((t) => t.location)),
+    });
   } catch (error: any) {
     res.status(500).json({ success: false, message: "Server error" });
   }
