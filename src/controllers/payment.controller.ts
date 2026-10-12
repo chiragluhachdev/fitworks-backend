@@ -9,8 +9,8 @@ import {
   getActivationState,
 } from "../utils/subscription";
 import { Gym } from "../models/Gym";
-import { findPricedPlan } from "../utils/hiring";
-import { applyGymMembership } from "../utils/gymMembership";
+
+import { applyGymAccess } from "../utils/gymMembership";
 
 /**
  * Activates a trainer permanently and records the payment.
@@ -203,32 +203,23 @@ const applyCapturedGymPayment = async (payment: any) => {
     return;
   }
 
-  const plan =
-    (await findPricedPlan(payment.notes?.plan)) ||
-    (await findPricedPlan(gym.subscription?.pendingPlan));
-  if (!plan) {
-    console.warn(`Webhook: no plan on gym order ${payment.order_id}`);
-    return;
-  }
   // The quote we raised the order with, carried in the notes we wrote. Falls
-  // back to the pending amount, then to today's price — a plan whose price has
-  // since been edited must not make a matching payment look like an underpay.
-  const quoted =
-    Number(payment.notes?.amountPaise) || gym.subscription?.pendingAmount || plan.price * 100;
-  if (Number(payment.amount) < quoted) {
+  // back to the pending amount — a price edited since must not make a matching
+  // payment look like an underpay.
+  const quoted = Number(payment.notes?.amountPaise) || gym.subscription?.pendingAmount || 0;
+  if (!quoted || Number(payment.amount) < quoted) {
     console.warn(
       `Webhook: underpaid gym order ${payment.order_id} — ${payment.amount} of ${quoted} paise`
     );
     return;
   }
 
-  await applyGymMembership(
+  await applyGymAccess(
     { _id: gym._id },
     {
       orderId: payment.order_id,
       paymentId: payment.id,
       amountPaise: Number(payment.amount),
-      plan: plan.id,
     }
   );
 };
@@ -263,7 +254,10 @@ export const razorpayWebhook = async (req: Request, res: Response): Promise<any>
     // Gyms and trainers share this endpoint. The notes were written by us when
     // the order was raised and come back inside a signed payload, so they are
     // the right thing to route on.
-    const isGymPayment = payment?.notes?.kind === "gym_membership" || !!payment?.notes?.gymId;
+    const isGymPayment =
+      payment?.notes?.kind === "gym_access" ||
+      payment?.notes?.kind === "gym_membership" ||
+      !!payment?.notes?.gymId;
 
     if (event === "payment.captured" && payment && isGymPayment) {
       await applyCapturedGymPayment(payment);
@@ -292,7 +286,6 @@ export const razorpayWebhook = async (req: Request, res: Response): Promise<any>
         {
           $unset: {
             "subscription.pendingOrderId": "",
-            "subscription.pendingPlan": "",
             "subscription.pendingAmount": "",
           },
         }

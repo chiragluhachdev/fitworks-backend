@@ -4,8 +4,7 @@ import { Gym } from "../models/Gym";
 import { Trainer } from "../models/Trainer";
 import { Application, CANDIDATE_STAGES } from "../models/Application";
 import { PIPELINE_STAGES } from "../models/Job";
-import { findPricedPlan, getGymSubscriptionState, gymVacancyStatus, IN_REVIEW_STAGES } from "../utils/hiring";
-import { addMonths, nextPeriodStart } from "../utils/gymMembership";
+import { getGymSubscriptionState, gymVacancyStatus, IN_REVIEW_STAGES } from "../utils/hiring";
 
 /**
  * The admin side of the hiring workflow.
@@ -278,49 +277,35 @@ export const removeShortlistEntry = async (req: Request, res: Response) => {
 };
 
 /**
- * Grants or revokes a gym's membership by hand.
+ * Grants or revokes a gym's access by hand.
  *
  * Gyms pay through Razorpay; this is the support override for the cases a
  * gateway cannot cover — comping a partner, honouring a payment that failed to
- * come back, or cutting off an account. It writes no payment record, because
- * no payment was taken, and it is logged so a free term is never mistaken for
- * a purchased one.
- *
- * The expiry is computed from the plan's own length rather than typed in, so
- * the two cannot drift apart.
+ * come back, or cutting an account off. It writes no payment record, because
+ * no payment was taken, and it is logged so free access is never mistaken for
+ * a purchase.
  */
 export const updateGymSubscription = async (req: Request, res: Response) => {
   try {
-    const { plan, action } = req.body;
+    const { action } = req.body;
 
     const gym = await Gym.findById(req.params.id);
     if (!gym) {
       return res.status(404).json({ success: false, message: "Gym not found" });
     }
 
-    if (action === "deactivate") {
+    if (action === "revoke") {
       gym.subscription.status = "inactive";
-      console.log(`Admin ${req.user?.userId} deactivated membership for ${gym.slug}.`);
-    } else {
-      const chosen = await findPricedPlan(plan);
-      if (!chosen) {
-        return res.status(400).json({ success: false, message: "Unknown plan" });
-      }
-      // Extends from the current expiry, exactly as a paid renewal would, so a
-      // comped month on top of a live term doesn't throw away what's left.
-      const start = nextPeriodStart(gym.subscription?.expiresAt);
-      const end = addMonths(start, chosen.months);
-
-      gym.subscription.plan = chosen.id;
+      // activatedAt stays: they did once have access, and erasing the date
+      // would make a later re-grant look like a first purchase.
+      console.log(`Admin ${req.user?.userId} revoked access for ${gym.slug}.`);
+    } else if (action === "grant") {
+      gym.subscription.plan = "lifetime";
       gym.subscription.status = "active";
-      if (!gym.subscription.startedAt) gym.subscription.startedAt = new Date();
-      gym.subscription.expiresAt = end;
-      gym.subscription.amount = chosen.price;
-      console.log(
-        `Admin ${req.user?.userId} granted ${chosen.name} to ${gym.slug} until ${end
-          .toISOString()
-          .slice(0, 10)} — no payment taken.`
-      );
+      if (!gym.subscription.activatedAt) gym.subscription.activatedAt = new Date();
+      console.log(`Admin ${req.user?.userId} granted access to ${gym.slug} — no payment taken.`);
+    } else {
+      return res.status(400).json({ success: false, message: "Use action: grant or revoke" });
     }
 
     await gym.save();
@@ -330,7 +315,7 @@ export const updateGymSubscription = async (req: Request, res: Response) => {
       subscription: getGymSubscriptionState(gym.subscription),
     });
   } catch (error: any) {
-    console.error("Update Gym Subscription Error:", error);
+    console.error("Update Gym Access Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };

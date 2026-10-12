@@ -3,8 +3,8 @@ import crypto from "crypto";
 import { Gym } from "../models/Gym";
 import { getRazorpay, keyId, keySecret } from "../config/razorpay";
 import { isOwnerOrAdmin } from "../middleware/auth.middleware";
-import { getPricedPlans, findPricedPlan, getGymSubscriptionState } from "../utils/hiring";
-import { applyGymMembership, addMonths, nextPeriodStart } from "../utils/gymMembership";
+import { getPricedGymPlan, getGymSubscriptionState } from "../utils/hiring";
+import { applyGymAccess } from "../utils/gymMembership";
 
 /**
  * Razorpay checkout for gym memberships.
@@ -30,10 +30,7 @@ export const createGymOrder = async (req: Request, res: Response): Promise<any> 
       });
     }
 
-    const plan = await findPricedPlan(req.body?.plan);
-    if (!plan) {
-      return res.status(400).json({ success: false, message: "Choose one of the FitWorks plans." });
-    }
+    const plan = await getPricedGymPlan();
 
     const gym = await Gym.findOne({ slug: req.params.slug });
     if (!gym) {
@@ -43,6 +40,15 @@ export const createGymOrder = async (req: Request, res: Response): Promise<any> 
       return res.status(403).json({ success: false, message: "Not authorized to pay for this gym" });
     }
 
+    // Paying twice for permanent access would be taking money for nothing.
+    if (getGymSubscriptionState(gym.subscription).isActive) {
+      return res.status(400).json({
+        success: false,
+        code: "ALREADY_ACTIVE",
+        message: "This gym already has access — there's nothing more to pay.",
+      });
+    }
+
     const amountPaise = plan.price * 100;
 
     const order = await getRazorpay().orders.create({
@@ -50,23 +56,17 @@ export const createGymOrder = async (req: Request, res: Response): Promise<any> 
       currency: "INR",
       receipt: `fwg_${Date.now().toString(36)}_${gym._id.toString().slice(-8)}`.slice(0, 40),
       notes: {
-        kind: "gym_membership",
+        kind: "gym_access",
         gymId: gym._id.toString(),
         gymSlug: gym.slug,
-        plan: plan.id,
         amountPaise: String(amountPaise),
-        purpose: `FitWorks ${plan.name} membership`,
+        purpose: "FitWorks gym access (one-time)",
       },
     });
 
     gym.subscription.pendingOrderId = order.id;
-    gym.subscription.pendingPlan = plan.id;
     gym.subscription.pendingAmount = amountPaise;
     await gym.save();
-
-    // What this payment buys, so checkout can say it plainly.
-    const periodStart = nextPeriodStart(gym.subscription.expiresAt);
-    const periodEnd = addMonths(periodStart, plan.months);
 
     return res.status(200).json({
       success: true,
@@ -74,9 +74,8 @@ export const createGymOrder = async (req: Request, res: Response): Promise<any> 
       keyId: keyId(),
       amount: amountPaise,
       currency: "INR",
-      plan: { id: plan.id, name: plan.name, price: plan.price, months: plan.months },
-      coverUntil: periodEnd,
-      renewal: !!gym.subscription.expiresAt,
+      plan: { id: plan.id, name: plan.name, price: plan.price },
+      oneTime: true,
       gymName: gym.gymName,
       contactName: gym.contactPerson?.name,
       contactPhone: gym.contactPerson?.phone,
@@ -138,39 +137,32 @@ export const verifyGymPayment = async (req: Request, res: Response): Promise<any
       });
     }
 
-    // The plan comes from what we charged for, never from the request body.
-    const plan = await findPricedPlan(gym.subscription.pendingPlan);
-    if (!plan) {
-      return res.status(400).json({ success: false, message: "We couldn't match this payment to a plan." });
-    }
-
     const order: any = await getRazorpay().orders.fetch(razorpay_order_id);
 
     // Check what they paid against what we asked Razorpay for, not against
-    // today's price. An admin editing a plan's price while someone is at
-    // checkout must not invalidate a payment that matched the quote.
-    const quoted = Number(order.amount) || gym.subscription.pendingAmount || plan.price * 100;
-    if (order.status !== "paid" || Number(order.amount_paid) < quoted) {
+    // today's price. An admin editing the price while someone is at checkout
+    // must not invalidate a payment that matched the quote.
+    const quoted = Number(order.amount) || gym.subscription.pendingAmount || 0;
+    if (order.status !== "paid" || !quoted || Number(order.amount_paid) < quoted) {
       return res.status(400).json({
         success: false,
         message: `Payment not complete (status: ${order.status})`,
       });
     }
 
-    const updated = await applyGymMembership(
+    const updated = await applyGymAccess(
       { _id: gym._id },
       {
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
         amountPaise: Number(order.amount_paid),
-        plan: plan.id,
       }
     );
 
     return res.status(200).json({
       success: true,
       subscription: getGymSubscriptionState(updated?.subscription),
-      message: `Payment received — your ${plan.name} membership is active.`,
+      message: "Payment received — your gym now has full access.",
     });
   } catch (error: any) {
     console.error("Gym Verify Payment Error:", error);
@@ -198,7 +190,7 @@ export const getGymMembership = async (req: Request, res: Response): Promise<any
     return res.status(200).json({
       success: true,
       subscription: getGymSubscriptionState(gym.subscription),
-      plans: await getPricedPlans(),
+      plan: await getPricedGymPlan(),
       paymentsEnabled: gatewayReady(),
       history,
     });

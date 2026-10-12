@@ -12,9 +12,9 @@ import {
   getGymSubscriptionState,
   gymVacancyStatus,
   IN_REVIEW_STAGES,
-  getPricedPlans,
+  getPricedGymPlan,
   clearPlanCache,
-  DEFAULT_GYM_PRICES,
+  DEFAULT_GYM_ACCESS_PRICE,
 } from "../utils/hiring";
 
 export const getDashboardStats = async (req: Request, res: Response) => {
@@ -35,13 +35,10 @@ export const getDashboardStats = async (req: Request, res: Response) => {
     });
     const filledVacancies = await Job.countDocuments({ pipelineStatus: "filled" });
     const trainersInReview = await Application.countDocuments({ status: { $in: IN_REVIEW_STAGES } });
-    const payingGyms = await Gym.countDocuments({
-      "subscription.status": "active",
-      $or: [{ "subscription.expiresAt": { $gt: new Date() } }, { "subscription.expiresAt": null }],
-    });
-    const lapsedGyms = await Gym.countDocuments({
-      "subscription.expiresAt": { $lt: new Date() },
-    });
+    const payingGyms = await Gym.countDocuments({ "subscription.status": "active" });
+    // Access never lapses now that it is bought once, so the only gyms worth
+    // chasing are the ones that have never paid.
+    const unpaidGyms = totalGyms - payingGyms;
     const activeMembers = await Trainer.countDocuments(activatedTrainerFilter());
     const lapsedMembers = totalTrainers - activeMembers;
 
@@ -64,7 +61,7 @@ export const getDashboardStats = async (req: Request, res: Response) => {
         filledVacancies,
         trainersInReview,
         payingGyms,
-        lapsedGyms,
+        unpaidGyms,
       }
     });
   } catch (error: any) {
@@ -363,10 +360,10 @@ export const getSettings = async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       data: settings,
-      // What the prices currently in effect actually work out to, so the
-      // settings screen shows the same figures a gym will see.
-      plans: await getPricedPlans(),
-      defaults: DEFAULT_GYM_PRICES,
+      // The price currently in effect, so the settings screen shows the same
+      // figure a gym will be charged.
+      plan: await getPricedGymPlan(),
+      defaultPrice: DEFAULT_GYM_ACCESS_PRICE,
     });
   } catch (error: any) {
     console.error("Admin Get Settings Error:", error);
@@ -375,12 +372,12 @@ export const getSettings = async (req: Request, res: Response) => {
 };
 
 /** A price must be a whole number of rupees, and a sane one. */
-const readPrice = (value: unknown, label: string): { value?: number; error?: string } => {
+const readPrice = (value: unknown): { value?: number; error?: string } => {
   const n = Number(value);
-  if (!Number.isFinite(n)) return { error: `${label} must be a number.` };
-  if (!Number.isInteger(n)) return { error: `${label} must be a whole number of rupees.` };
-  if (n < 1) return { error: `${label} must be at least ₹1.` };
-  if (n > 500000) return { error: `${label} looks like a mistake — cap is ₹5,00,000.` };
+  if (!Number.isFinite(n)) return { error: "The access price must be a number." };
+  if (!Number.isInteger(n)) return { error: "The access price must be a whole number of rupees." };
+  if (n < 1) return { error: "The access price must be at least ₹1." };
+  if (n > 500000) return { error: "That price looks like a mistake — the cap is ₹5,00,000." };
   return { value: n };
 };
 
@@ -395,39 +392,11 @@ export const updateSettings = async (req: Request, res: Response) => {
       settings.otpEnabled = req.body.otpEnabled;
     }
 
-    const incoming = req.body.gymPlanPrices;
-    if (incoming && typeof incoming === "object") {
-      // A settings document saved before prices existed has no such field.
-      if (!settings.gymPlanPrices) {
-        settings.gymPlanPrices = { ...DEFAULT_GYM_PRICES };
-      }
-
-      const labels: Record<string, string> = {
-        monthly: "The monthly price",
-        quarterly: "The 3-month price",
-        annual: "The annual price",
-      };
-
-      for (const key of ["monthly", "quarterly", "annual"] as const) {
-        if (incoming[key] === undefined || incoming[key] === "") continue;
-        const { value, error } = readPrice(incoming[key], labels[key]);
-        if (error) return res.status(400).json({ success: false, message: error });
-        settings.gymPlanPrices[key] = value!;
-      }
-
-      const { monthly, quarterly, annual } = settings.gymPlanPrices;
-      // A longer term costing more in total than a shorter one is almost
-      // certainly a typo, and it would be visibly absurd on the pricing page.
-      if (quarterly < monthly || annual < quarterly) {
-        return res.status(400).json({
-          success: false,
-          message: "Each longer term should cost more in total than the one before it.",
-        });
-      }
-
-      console.log(
-        `Admin ${req.user?.userId} set gym prices to ₹${monthly} / ₹${quarterly} / ₹${annual}.`
-      );
+    if (req.body.gymAccessPrice !== undefined && req.body.gymAccessPrice !== "") {
+      const { value, error } = readPrice(req.body.gymAccessPrice);
+      if (error) return res.status(400).json({ success: false, message: error });
+      settings.gymAccessPrice = value!;
+      console.log(`Admin ${req.user?.userId} set the gym access price to ₹${value}.`);
     }
 
     await settings.save();
@@ -438,7 +407,7 @@ export const updateSettings = async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       data: settings,
-      plans: await getPricedPlans(),
+      plan: await getPricedGymPlan(),
     });
   } catch (error: any) {
     console.error("Admin Update Settings Error:", error);

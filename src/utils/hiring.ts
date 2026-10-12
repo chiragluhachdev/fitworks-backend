@@ -1,142 +1,105 @@
 import type { PipelineStage } from "../models/Job";
 import type { CandidateStage } from "../models/Application";
-import { SystemSetting, DEFAULT_GYM_PRICES } from "../models/SystemSetting";
+import { SystemSetting } from "../models/SystemSetting";
 
-export { DEFAULT_GYM_PRICES };
+/* ───────────────────────── Gym access ───────────────────────── */
 
 /**
- * Gym membership plans.
+ * Gyms pay once.
  *
- * Every plan carries the same features — the only thing that changes is how
- * long it runs for, and the rate that falls out of that.
+ * There used to be three terms — monthly, quarterly, annual — which brought
+ * expiry dates, renewals that extended from the old end date, and a carousel
+ * to choose between them. Nobody ever bought one. A single one-time fee does
+ * the same job with none of that machinery: paid is paid, permanently.
  *
- * The shape is fixed in code; the prices are not. An admin sets those in
- * Settings, and everything that quotes or charges reads them from there. What
- * is written below is only the fallback for a platform whose settings have
- * never been saved.
+ * The price is set by an admin in Settings; the constant below is only the
+ * fallback for a platform whose settings have never been saved.
  */
-const PLAN_SHAPE = [
-  { id: "monthly", name: "FitWorks Monthly", months: 1, cadence: "per month", best: false },
-  // The one we point people at: a quarter is long enough for our team to
-  // actually fill a role, without asking a new gym to commit to a year.
-  { id: "quarterly", name: "FitWorks 3 Months", months: 3, cadence: "per 3 months", best: true },
-  { id: "annual", name: "FitWorks Annual", months: 12, cadence: "per year", best: false },
-] as const;
+export const DEFAULT_GYM_ACCESS_PRICE = 499;
 
-export type GymPlanId = (typeof PLAN_SHAPE)[number]["id"];
-
-export interface GymPlan {
-  id: GymPlanId;
+export interface GymAccessPlan {
+  id: "lifetime";
   name: string;
-  /** Rupees for the whole term. */
+  /** Rupees, charged once. */
   price: number;
-  months: number;
-  cadence: string;
-  /** What the term works out to per month, for comparing terms honestly. */
-  perMonth: number;
-  /** Saving against the monthly rate, which is the yardstick by definition. */
-  savingsPercent: number;
-  best: boolean;
 }
 
-export type GymPrices = Record<GymPlanId, number>;
-
-/** Applies prices to the fixed plan shape and derives the comparisons. */
-export const buildGymPlans = (prices: Partial<GymPrices>): GymPlan[] => {
-  const monthlyRate = prices.monthly || DEFAULT_GYM_PRICES.monthly;
-  return PLAN_SHAPE.map((shape) => {
-    const price = prices[shape.id] ?? DEFAULT_GYM_PRICES[shape.id];
-    return {
-      id: shape.id,
-      name: shape.name,
-      months: shape.months,
-      cadence: shape.cadence,
-      best: shape.best,
-      price,
-      perMonth: Math.round(price / shape.months),
-      // A term priced at or above the monthly rate saves nothing — never show
-      // a negative saving.
-      savingsPercent: Math.max(0, Math.round((1 - price / shape.months / monthlyRate) * 100)),
-    };
-  });
-};
+export const gymAccessPlan = (price: number): GymAccessPlan => ({
+  id: "lifetime",
+  name: "FitWorks Gym Access",
+  price,
+});
 
 /**
- * The live plans, priced from Settings.
+ * The live price, from Settings.
  *
  * Cached for a minute: this is read on every checkout, every dashboard load
- * and every pricing page render, and it changes about once a quarter. Saving
- * a price clears the cache, so an admin never waits to see their change.
+ * and every pricing page render, and it changes about once a quarter. Saving a
+ * price clears the cache, so an admin never waits to see their change.
  */
-let priceCache: { plans: GymPlan[]; at: number } | null = null;
+let priceCache: { price: number; at: number } | null = null;
 const PRICE_CACHE_MS = 60_000;
 
 export const clearPlanCache = () => {
   priceCache = null;
 };
 
-export const getPricedPlans = async (): Promise<GymPlan[]> => {
-  if (priceCache && Date.now() - priceCache.at < PRICE_CACHE_MS) return priceCache.plans;
+export const getGymAccessPrice = async (): Promise<number> => {
+  if (priceCache && Date.now() - priceCache.at < PRICE_CACHE_MS) return priceCache.price;
 
-  let prices: Partial<GymPrices> = {};
+  let price = DEFAULT_GYM_ACCESS_PRICE;
   try {
-    const settings = await SystemSetting.findOne().select("gymPlanPrices").lean();
-    if (settings?.gymPlanPrices) prices = settings.gymPlanPrices;
+    const settings = await SystemSetting.findOne().select("gymAccessPrice").lean();
+    if (settings?.gymAccessPrice) price = settings.gymAccessPrice;
   } catch (error) {
     // Never let a settings read stop someone paying us. Falling back to the
-    // launch prices is wrong by at most one price change; failing is worse.
-    console.error("Plan prices: falling back to defaults —", error);
+    // launch price is wrong by at most one price change; failing is worse.
+    console.error("Gym access price: falling back to default —", error);
   }
 
-  const plans = buildGymPlans(prices);
-  priceCache = { plans, at: Date.now() };
-  return plans;
+  priceCache = { price, at: Date.now() };
+  return price;
 };
 
-/** One plan, priced from Settings. Null for an id we don't sell. */
-export const findPricedPlan = async (id: unknown): Promise<GymPlan | null> =>
-  (await getPricedPlans()).find((p) => p.id === id) ?? null;
-
-/**
- * A plan's identity only — id, name, length. Carries no price.
- *
- * Anything involving money must use findPricedPlan instead, so it cannot quote
- * or charge a number that is no longer what we sell for.
- */
-export const findPlan = (id: unknown) => PLAN_SHAPE.find((p) => p.id === id) ?? null;
+/** The plan, priced. There is only one, so there is nothing to look up. */
+export const getPricedGymPlan = async (): Promise<GymAccessPlan> =>
+  gymAccessPlan(await getGymAccessPrice());
 
 export interface GymSubscriptionState {
-  plan: string;
-  planName: string;
   isActive: boolean;
-  status: "inactive" | "active" | "expired";
-  startedAt: Date | null;
-  expiresAt: Date | null;
-  /** Whole days remaining, or null when there is no active term. */
-  daysLeft: number | null;
-  /** The order we're waiting on, if checkout is mid-flight. */
+  status: "inactive" | "active";
+  /** When they paid. Null until they do. Never cleared, never expires. */
+  activatedAt: Date | null;
+  /** Rupees actually received, summed from the payment record. */
+  amountPaid: number;
+  /** The order we are waiting on, if checkout is mid-flight. */
   pendingOrderId: string | null;
 }
 
 /**
- * Derives the live membership state from what is stored.
+ * Derives access from the payment record.
  *
- * An expiry date in the past means expired no matter what `status` says, so a
- * term that lapses between logins is never shown as active.
+ * There is no expiry to compute: one payment, permanent access. A record with
+ * a payment in its history is active even if `status` was never written —
+ * money received is the fact; the flag is only a cache of it.
  */
 export const getGymSubscriptionState = (sub: any): GymSubscriptionState => {
-  const expiresAt = sub?.expiresAt ? new Date(sub.expiresAt) : null;
-  const lapsed = !!expiresAt && expiresAt.getTime() < Date.now();
-  const active = sub?.status === "active" && !lapsed;
+  const history = sub?.history || [];
+  const activatedAt = sub?.activatedAt
+    ? new Date(sub.activatedAt)
+    : history[0]?.paidAt
+    ? new Date(history[0].paidAt)
+    : null;
+
+  // An admin can comp access without a payment, which is why the stored
+  // status is honoured on its own as well.
+  const active = !!activatedAt || sub?.status === "active";
 
   return {
-    plan: sub?.plan || "none",
-    planName: findPlan(sub?.plan)?.name || "No plan",
     isActive: active,
-    status: active ? "active" : lapsed ? "expired" : sub?.status || "inactive",
-    startedAt: sub?.startedAt ? new Date(sub.startedAt) : null,
-    expiresAt,
-    daysLeft: active && expiresAt ? Math.ceil((expiresAt.getTime() - Date.now()) / 86400000) : null,
+    status: active ? "active" : "inactive",
+    activatedAt,
+    amountPaid: history.reduce((sum: number, h: any) => sum + (h.amount || 0), 0),
     pendingOrderId: sub?.pendingOrderId || null,
   };
 };

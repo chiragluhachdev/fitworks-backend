@@ -34,30 +34,24 @@ export interface IGym extends Document {
     email?: string;
   };
   subscription: {
-    plan: "none" | "monthly" | "quarterly" | "annual";
-    status: "inactive" | "active" | "expired";
-    /** When this gym first became a member. Written once. */
-    startedAt?: Date;
-    /** End of the term currently paid for. */
-    expiresAt?: Date;
-    /** Rupees charged for the current term. */
+    /** "none" until they pay; "lifetime" after. There is only one thing to buy. */
+    plan: "none" | "lifetime";
+    status: "inactive" | "active";
+    /** When access was granted. Written once, never cleared, never expires. */
+    activatedAt?: Date;
+    /** Rupees charged. */
     amount?: number;
-    /** The order we are waiting on, the plan it was raised for, and the
-     *  amount in paise we actually asked for. */
+    /** The order we are waiting on, and the amount we quoted for it. */
     pendingOrderId?: string;
-    pendingPlan?: "monthly" | "quarterly" | "annual";
     pendingAmount?: number;
     lastOrderId?: string;
     lastPaymentId?: string;
-    /** Immutable payment record — every term this gym has bought. */
+    /** Immutable payment record. */
     history: {
       orderId: string;
       paymentId: string;
-      plan: string;
       amount: number;
       paidAt: Date;
-      periodStart: Date;
-      periodEnd: Date;
     }[];
   };
   slug: string;
@@ -118,32 +112,25 @@ const gymSchema = new Schema<IGym>(
       phone: { type: String, required: true },
       email: { type: String, lowercase: true, trim: true },
     },
-    // Gyms that signed up before plans existed read as inactive, which is
+    // Gyms that signed up before this existed read as inactive, which is
     // correct — nobody has been charged.
     subscription: {
       plan: {
         type: String,
-        enum: ["none", "monthly", "quarterly", "annual"],
+        enum: ["none", "lifetime"],
         default: "none",
       },
       status: {
         type: String,
-        enum: ["inactive", "active", "expired"],
+        enum: ["inactive", "active"],
         default: "inactive",
       },
-      startedAt: { type: Date },
-      expiresAt: { type: Date },
+      activatedAt: { type: Date },
       amount: { type: Number },
-      // Held between raising the order and the payment coming back, so the
-      // term is decided by what we charged for — never by what the browser
-      // sends us at verification time.
+      // Held between raising the order and the payment coming back. The amount
+      // is kept so a price change mid-checkout cannot invalidate a payment
+      // that matched what we quoted.
       pendingOrderId: { type: String },
-      pendingPlan: {
-        type: String,
-        enum: ["monthly", "quarterly", "annual"],
-      },
-      // Paise. Prices are editable, so a payment must be checked against what
-      // we quoted at the time — not against whatever the price is now.
       pendingAmount: { type: Number },
       lastOrderId: { type: String },
       lastPaymentId: { type: String },
@@ -151,14 +138,12 @@ const gymSchema = new Schema<IGym>(
         {
           orderId: { type: String, required: true },
           paymentId: { type: String, required: true },
-          plan: { type: String, required: true },
           amount: { type: Number, required: true },
           paidAt: { type: Date, required: true },
-          periodStart: { type: Date, required: true },
-          periodEnd: { type: Date, required: true },
         },
       ],
     },
+
     slug: {
       type: String,
       required: true,
@@ -169,6 +154,6 @@ const gymSchema = new Schema<IGym>(
 );
 
 gymSchema.index({ "subscription.pendingOrderId": 1 });
-gymSchema.index({ "subscription.status": 1, "subscription.expiresAt": 1 });
+gymSchema.index({ "subscription.activatedAt": 1 });
 
 export const Gym = mongoose.model<IGym>("Gym", gymSchema);
